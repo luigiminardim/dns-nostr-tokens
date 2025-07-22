@@ -8,3 +8,4 @@ bdk = { version = "0.22", default-features = false, features = ["all-keys", "key
 dirs-next = "2.0"
 dotenvy = "0.15.7"
 hex = "0.4.3"
+serde_json = "1.0"

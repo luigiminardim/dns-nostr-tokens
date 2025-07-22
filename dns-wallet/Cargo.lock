@@ -270,6 +270,7 @@ dependencies = [
  "dirs-next",
  "dotenvy",
  "hex",
+ "serde_json",
 ]
 
 [[package]]
