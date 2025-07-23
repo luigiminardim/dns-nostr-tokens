@@ -124,12 +124,12 @@ The general structure of the Name-Token inscription is as follows:
 OP_FALSE
 OP_IF
   OP_PUSH "name"            # Namespace identifier (ASCII string)
-  OP_PUSH $label            # Represents the subdomain (e.g., "blog") - follows RFC-1034 and lowercase
-  OP_0                      # Section separator (OP_0 opcode)
-  OP_PUSH $section_protocol # Identifier for the protocol using this token's data (ASCII string, e.g., "dns-nostr")
+  OP_PUSH $label            # Represents the subdomain (e.g., "blog") - follows RFC-1034
+  OP_NOP                      # Section separator (OP_NOP opcode)
+  OP_PUSH $section_protocol # Identifier for the protocol using this token's data (e.g., "dns-nostr")
   OP_PUSH $argument_0       # Protocol-specific argument (format depends on <section_protocol>)
   # ...
-  # Additional protocol-specific sections can be added, each preceded by OP_0
+  # Additional protocol-specific sections can be added, each preceded by OP_NOP
 OP_ENDIF
 ```
 
@@ -137,8 +137,8 @@ The fields explanation is as follows:
 
 - name: A fixed ASCII string identifying this output as containing Name-Token metadata.
 - `$label`: The unique UTF-8 string representing the name of the token (e.g., "mydomain").
-- `OP_0`: An opcode used as a separator between different sections of the inscription. This allows for extensibility and the potential inclusion of data for different protocols associated with the same Name-Token in the future.
-- `$section_protocol`: An ASCII string identifying the protocol for which the subsequent arguments are intended (e.g., "dns-nostr").
+- `OP_NOP`: An opcode used as a separator between different sections of the inscription. This allows for extensibility and the potential inclusion of data for different protocols associated with the same Name-Token in the future.
+- `$section_protocol`: A string identifying the protocol for which the subsequent arguments are intended (e.g., "dns-nostr").
 - `$argument_0`: The first argument specific to the protocol defined in `$section_protocol`. The format and number of arguments depends on the protocol.
 
 ### DNS-Nostr Inscription Protocol
@@ -152,9 +152,9 @@ key associated with the token.
 ```bash
 OP_FALSE
 OP_IF
-  OP_PUSH "name"
+  OP_PUSH "name"            # Fixed ASCII string identifying this output as a DNS-Nostr Name-Token
   OP_PUSH $label            # Should follow RFC-1034 DNS rules for labels and use downcase letters
-  OP_0
+  OP_NOP
   OP_PUSH "dns-nostr"
   OP_PUSH $nostr_pubkey_hex # Raw hexadecimal representation of the Nostr public key
 OP_ENDIF

@@ -1,35 +1,41 @@
-#[derive(Debug, Clone)]
-pub struct DnsNostrToken {
-    pub label: String,
-    pub nostr_pubkey: nostr_sdk::PublicKey,
+use std::{future::Future, sync::Arc};
+
+use crate::{
+    dns_nostr_token::DnsNostrToken, name_token::Bytes, name_token_repository::NameTokenRepository,
+};
+use hickory_server::proto::rr::domain::Label;
+
+pub trait GetDnsNostrToken: Send + Sync {
+    fn get_token(&self, label: &Label) -> impl Future<Output = Option<DnsNostrToken>> + Send;
 }
 
 pub struct DnsNostrTokenRepository {
-    _priv: (),
+    name_token_repository: Arc<NameTokenRepository>,
 }
 
 impl DnsNostrTokenRepository {
-    pub fn new() -> Self {
-        DnsNostrTokenRepository { _priv: () }
+    pub fn new(name_token_repository: Arc<NameTokenRepository>) -> Self {
+        DnsNostrTokenRepository {
+            name_token_repository,
+        }
     }
 
-    /// TODO: implement a real token repository
-    pub async fn get_token(&self, label: &str) -> Option<DnsNostrToken> {
-        // ## Private key
-        // bech32 nsec1dlca2jrtdrv5xq7s6aku25s68sm0yqsr55a65xk8q762maw2mgwquqvqa6
-        // hex    6ff1d5486b68d94303d0d76dc5521a3c36f20203a53baa1ac707b4adf5cada1c
-        // ## Public key
-        // bech32 npub1llme4s02jegnqnk5kudq2smj44dzv2lxztw6qky2awzxzaaa983ql8jaue
-        // hex    fff79ac1ea9651304ed4b71a054372ad5a262be612dda0588aeb846177bd29e2
-        let nostr_pubkey = nostr_sdk::PublicKey::from_byte_array([
-            0xff, 0xf7, 0x9a, 0xc1, 0xea, 0x96, 0x51, 0x30, 0x4e, 0xd4, 0xb7, 0x1a, 0x05, 0x43,
-            0x72, 0xad, 0x5a, 0x26, 0x2b, 0xe6, 0x12, 0xdd, 0xa0, 0x58, 0x8a, 0xeb, 0x84, 0x61,
-            0x77, 0xbd, 0x29, 0xe2,
-        ]);
-        let dns_nostr_token = DnsNostrToken {
-            label: label.to_string(),
-            nostr_pubkey,
+    pub async fn get_token(&self, label: &Label) -> Option<DnsNostrToken> {
+        let label = Bytes::from(label.as_bytes());
+        let name_token = self.name_token_repository.get_name_token(&label).await;
+        let dns_nostr_token = match name_token {
+            None => return None,
+            Some(name_token) => DnsNostrToken::try_from(name_token),
         };
-        Some(dns_nostr_token)
+        match dns_nostr_token {
+            Err(_) => None,
+            Ok(dns_nostr_token) => Some(dns_nostr_token),
+        }
+    }
+}
+
+impl GetDnsNostrToken for DnsNostrTokenRepository {
+    async fn get_token(&self, label: &Label) -> Option<DnsNostrToken> {
+        self.get_token(label).await
     }
 }
