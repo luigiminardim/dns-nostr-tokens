@@ -16,7 +16,7 @@ use bdk::keys::DescriptorKey::Secret;
 
 use bdk::miniscript::miniscript::Segwitv0;
 
-use bdk::{SyncOptions, Wallet};
+use bdk::{SyncOptions, Wallet, FeeRate};
 use bdk::wallet::{AddressIndex, signer::SignOptions, wallet_name_from_descriptor};
 
 use bdk::sled::{self, Tree};
@@ -121,12 +121,7 @@ fn main() {
                 io::stdin().read_line(&mut token_name).unwrap();
                 let token_name = token_name.trim();
                 
-                // Get nostr pubkey
-                print!("Enter nostr pubkey: ");
-                io::stdout().flush().unwrap();
-                let mut nostr_pubkey = String::new();
-                io::stdin().read_line(&mut nostr_pubkey).unwrap();
-                let nostr_pubkey = nostr_pubkey.trim();
+                let nostr_pubkey = "npub13gek05sdmvu4cqzwypslv55mtrcyyruva0x55lt90ljrv6nwd5uqud7dnn8a3367d20ddb395c004e2061f6529b58f0420f8cebcd4a7d657fe4366a6e6d38";
                 
                 // Get DNS file path
                 print!("Enter DNS file path: ");
@@ -246,6 +241,14 @@ fn create_dns_nostr_token(bdk_wallet: &Wallet<Tree>, custom_script: Script, bloc
     // Sync wallet before creating transaction
     bdk_wallet.sync(blockchain, SyncOptions::default()).unwrap();
     
+    // Check balance before creating transaction
+    let balance = bdk_wallet.get_balance().unwrap();
+    if balance.get_spendable() < 10000 { // Need at least 10000 sats (2000 for output + ~2000 for fees + 546 for change)
+        println!("Error: Insufficient balance. You need at least 10000 sats to create a DNS-Nostr token.");
+        println!("Current spendable balance: {} sats", balance.get_spendable());
+        return None;
+    }
+    
     // Get a change address
     let change_address = bdk_wallet.get_address(AddressIndex::New).unwrap().address;
     
@@ -269,14 +272,24 @@ fn create_dns_nostr_token(bdk_wallet: &Wallet<Tree>, custom_script: Script, bloc
     // Exclude DNS-Nostr tokens from being spent
     tx_builder.unspendable(excluded_utxos);
     
-    // Add custom script output (1000 sats - above dust limit for custom scripts) and change output
-    tx_builder.add_recipient(custom_script, 1000);
+    // Set a reasonable fee rate (5 sat/vbyte)
+    tx_builder.fee_rate(FeeRate::from_sat_per_vb(5.0));
     
-    // Enable change output
-    tx_builder.drain_to(change_address.script_pubkey());
+    // Add custom script output (546 sats is the standard dust limit, but use 2000 to be safe)
+    tx_builder.add_recipient(custom_script, 2000);
+    
+    // Manually enable RBF
+    tx_builder.enable_rbf();
+    
     
     // Finalize the transaction and extract the PSBT
-    let (mut psbt, _) = tx_builder.finish().unwrap();
+    let (mut psbt, _) = match tx_builder.finish() {
+        Ok(result) => result,
+        Err(e) => {
+            println!("Error creating transaction: {:?}", e);
+            return None;
+        }
+    };
     
     // Set signing option
     let signopt = SignOptions {
