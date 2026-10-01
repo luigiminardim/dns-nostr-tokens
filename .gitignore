@@ -1,3 +1,15 @@
 target/
-.env
+debug/
+release/
+*.rs.bk
+*.rlib
+*.prof*
+*.log
+.env*
 *.sqlite
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/

@@ -1,5 +1,6 @@
 [workspace]
 
 members = [
-    "./dns_nostr_server",
+    "crates/name_token_kernel",
+    "dns_nostr_server",
 ]
