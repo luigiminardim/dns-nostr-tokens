@@ -10,7 +10,7 @@
 
 - [X] T001 Configure Cargo workspace members in root `Cargo.toml` to include `"crates/name_token_kernel"` and `"dns_nostr_server"`
 - [X] T002 Initialize `crates/name_token_kernel/Cargo.toml` with `bitcoin`, `serde`, `serde_json`, and `thiserror` dependencies
-- [ ] T003 [P] Create initial module exports and directory structure in `crates/name_token_kernel/src/lib.rs`
+- [X] T003 [P] Create initial module exports and directory structure in `crates/name_token_kernel/src/lib.rs`
 
 ---
 
