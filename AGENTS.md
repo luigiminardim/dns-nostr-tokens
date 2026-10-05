@@ -1,8 +1,9 @@
 # AGENTS.md
 
-> This project is a work-in-progress. The codebase currently contains only the
-> `dns_nostr_server` crate. The DNS-Nostr Wallet described in the README does
-> not exist yet. All guidance below applies to **what is built today**.
+> This project is a work-in-progress. The codebase currently contains the
+> `name_token` (domain library) and `dns_nostr_server` crates. The DNS-Nostr
+> Wallet described in the README does not exist yet. All guidance below applies
+> to **what is built today**.
 
 > **Agent orchestration rules** (workflow, core principles, behavioral guardrails)
 > are defined in [`.agents/rules/agent-orchestration.md`](.agents/rules/agent-orchestration.md)
@@ -37,6 +38,18 @@ DNS Client ──DNS query──▶ dns_nostr_server ──RPC──▶ Bitcoin 
 The server resolves subdomains under a configured zone (e.g., `nostr.dns.name.`)
 by looking up the label's Name-Token on Bitcoin, extracting the Nostr pubkey,
 and fetching DNS records from a Nostr relay.
+
+The Name-Token domain lives in the standalone `name_token` crate (depends only
+on `bitcoin`, `serde`, `async-trait`). Dependencies point inward:
+
+```
+dns_nostr_server ──▶ name_token ──▶ bitcoin
+```
+
+`name_token` defines the `NameTokenRepository` port and the `NameTokenService`
+(`apply_block`, `get_name_token`). `dns_nostr_server` implements the port with
+SQLite (`SqliteNameTokenRepository`) and feeds blocks from Bitcoin Core into the
+service (`BlockchainWatcher`). `main.rs` wires them together.
 
 ---
 
@@ -103,7 +116,7 @@ functions, clean error handling, and co-located tests.
 
 ```
 dns-nostr-tokens/
-├── Cargo.toml                    # Workspace root (members: dns_nostr_server)
+├── Cargo.toml                    # Workspace root (members: name_token, dns_nostr_server; shared [workspace.dependencies])
 ├── Cargo.lock
 ├── README.md
 ├── docker-compose.yml            # Bitcoin regtest + Nostr relay
@@ -112,15 +125,24 @@ dns-nostr-tokens/
 ├── docs/
 │   └── domain.md                 # Ubiquitous language & high-level domain model (DDD)
 │
-├── dns_nostr_server/             # Main (and only) crate
+├── name_token/                   # Core domain library (no infrastructure dependencies)
 │   ├── Cargo.toml
 │   └── src/
-│       ├── main.rs               # Entry point — wires up the DNS server on UDP :1053
+│       ├── lib.rs                # Module declarations + public re-exports
+│       ├── inscription.rs        # Bytes, Inscription, InscriptionSection, InscriptionMetadata, parsing
+│       ├── name_token.rs         # NameToken, UpdateNameTokenError, lifecycle, First Confirmed Rule
+│       ├── name_token_repository.rs  # NameTokenRepository async trait (port)
+│       └── name_token_service.rs # NameTokenService: apply_block, get_name_token, next_block_height
+│
+├── dns_nostr_server/             # DNS server application (depends on name_token)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs               # Composition root — wires the DNS server on UDP :1053
 │       ├── lib.rs                # Module declarations
-│       ├── name_token.rs         # Core domain: Inscription, NameToken, parsing, lifecycle
-│       ├── name_token_repository.rs  # SQLite-backed NameToken persistence + Bitcoin RPC sync
+│       ├── sqlite_name_token_repository.rs  # SQLite implementation of name_token::NameTokenRepository
+│       ├── blockchain_watcher.rs # Bitcoin Core RPC sync loop feeding blocks to NameTokenService
 │       ├── dns_nostr_token.rs    # DNS-Nostr-specific token logic (extracts npub from sections)
-│       ├── dns_nostr_token_repository.rs  # Queries NameTokenRepository for DNS-Nostr tokens
+│       ├── dns_nostr_token_repository.rs  # Queries NameTokenService for DNS-Nostr tokens
 │       ├── nostr_authority.rs    # Hickory Authority impl — handles DNS lookups via Nostr
 │       └── nostr_events_repository.rs  # Fetches DNS record events from a Nostr relay
 │
@@ -182,12 +204,14 @@ with production code (no separate `tests/` directory).
 # Run all tests
 cargo test --workspace
 
-# Run tests for a specific module
-cargo test --package dns_nostr_server -- name_token
+# Run tests for a specific crate
+cargo test -p name_token
 ```
 
 Key test files:
-- `name_token.rs` — inscription parsing, token lifecycle (create/update/revoke), ordering, valid-token selection
+- `name_token/src/inscription.rs` — inscription parsing, metadata ordering
+- `name_token/src/name_token.rs` — token lifecycle (create/update/revoke), valid-token selection
+- `name_token/src/name_token_service.rs` — block application and label resolution against an in-memory repository fake
 - Other modules follow the same pattern with `#[cfg(test)]` blocks
 
 ### Integration testing (manual)

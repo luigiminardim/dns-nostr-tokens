@@ -3,17 +3,20 @@ use hickory_server::{
     ServerFuture,
 };
 use lib::{
-    dns_nostr_token_repository::DnsNostrTokenRepository,
-    name_token_repository::NameTokenRepository, nostr_authority::NostrAuthority,
-    nostr_events_repository::NostrEventsRepository,
+    blockchain_watcher::BlockchainWatcher, dns_nostr_token_repository::DnsNostrTokenRepository,
+    nostr_authority::NostrAuthority, nostr_events_repository::NostrEventsRepository,
+    sqlite_name_token_repository::SqliteNameTokenRepository,
 };
+use name_token::NameTokenService;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 #[tokio::main]
 async fn main() {
-    let name_token_repository = Arc::new(NameTokenRepository::create().await);
-    let dns_nostr_token_repository = DnsNostrTokenRepository::new(name_token_repository.clone());
+    let name_token_repository = SqliteNameTokenRepository::create().await;
+    let name_token_service = Arc::new(NameTokenService::new(name_token_repository));
+    BlockchainWatcher::new(name_token_service.clone()).spawn();
+    let dns_nostr_token_repository = DnsNostrTokenRepository::new(name_token_service);
 
     let nostr_events_repository = NostrEventsRepository::new("ws://localhost:8080".to_string());
 

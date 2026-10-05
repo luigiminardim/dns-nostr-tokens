@@ -20,6 +20,8 @@
 | **Revocation** | Spending a Name-Token's UTXO without creating a new inscription for that Label. The name becomes unowned. |
 | **Valid Name-Token** | The Name-Token selected by the First Confirmed Rule for a given Label — the one the system treats as authoritative. |
 | **Zone** | The DNS domain under which subdomains are resolved (e.g., `nostr.dns.name.`). Labels become subdomains of this zone. |
+| **Name-Token Service** | Domain service (`NameTokenService`) that applies confirmed blocks to the Name-Token state (`apply_block`) and resolves a Label to its Valid Name-Token (`get_name_token`). Lives in the `name_token` crate. |
+| **Name-Token Repository** | Port (`NameTokenRepository` trait) defined by the domain and implemented by outer layers (e.g., SQLite); stores Name-Tokens and the next block height to apply. |
 
 ---
 
@@ -39,12 +41,11 @@
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                       Name-Token                            │
-│  txid: Txid                                                 │
-│  vout: u32                                                  │
-│  inscription: Inscription                                   │
-│  block_height: u64                                          │
-│  tx_index: u32                                              │
-│  spent: bool                                                │
+│  label: Label                                               │
+│  first_inscription_metadata: InscriptionMetadata            │
+│  last_inscription_metadata: InscriptionMetadata             │
+│    (blockheight, blockindex, vout, txid)                    │
+│  inscription: Option<Inscription>  (None = revoked)         │
 └─────────────────────────────────────────────────────────────┘
                           │
                    specialized as

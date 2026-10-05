@@ -1,0 +1,12 @@
+[package]
+name = "name_token"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+async-trait.workspace = true
+bitcoin.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

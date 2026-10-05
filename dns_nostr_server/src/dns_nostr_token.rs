@@ -1,5 +1,5 @@
-use crate::name_token::NameToken;
 use hickory_server::proto::rr::domain::Label;
+use name_token::NameToken;
 use nostr_sdk::PublicKey;
 
 #[derive(Debug, Clone)]
@@ -34,9 +34,9 @@ impl TryFrom<NameToken> for DnsNostrToken {
             None => Err(DnsNostrTokenFromNameTokenError::MissingProtocolArgs),
             Some(args) => Ok(args),
         }?;
-        let nostr_pubkey = match protocol_args.get(0) {
+        let nostr_pubkey = match protocol_args.first() {
             None => Err(DnsNostrTokenFromNameTokenError::InvalidPublicKey),
-            Some(arg) => match PublicKey::from_slice(&arg) {
+            Some(arg) => match PublicKey::from_slice(arg) {
                 Err(_) => Err(DnsNostrTokenFromNameTokenError::InvalidPublicKey),
                 Ok(pubkey) => Ok(pubkey),
             },
@@ -53,7 +53,7 @@ mod tests {
     use bitcoin::{hashes::Hash, Txid};
 
     use super::*;
-    use crate::name_token::{Inscription, InscriptionMetadata, InscriptionSection, NameToken};
+    use name_token::{Inscription, InscriptionMetadata, InscriptionSection, NameToken};
 
     #[test]
     fn test_try_from_name_token() {
@@ -63,9 +63,7 @@ mod tests {
                 label: b"domain".into(),
                 sections: vec![InscriptionSection {
                     protocol: b"dns-nostr".into(),
-                    arguments: vec![
-                        nostr_pubkey.to_bytes().into(),
-                    ],
+                    arguments: vec![nostr_pubkey.to_bytes().into()],
                 }],
             },
             InscriptionMetadata {
