@@ -15,6 +15,7 @@ These rules govern how agents should approach any task in this repository.
 - If something goes sideways, **stop and re-plan immediately** — don't keep pushing.
 - Use plan mode for verification steps, not just building.
 - Write detailed specs upfront to reduce ambiguity.
+- **Wait for Plan Approval:** Always present the plan to the user and wait for explicit approval before proceeding to implementation or test writing. Never start building without user approval of the plan.
 
 ### 2. Subagent Strategy
 
