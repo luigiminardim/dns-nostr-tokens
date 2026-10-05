@@ -132,15 +132,15 @@ impl<GetTokenT: GetDnsNostrToken> NostrAuthority<GetTokenT> {
         let (_, records) = Parser::new(&zone_file, None, Some(zone_name.clone()))
             .parse()
             .inspect_err(|e| {
-                eprintln!("failed to parse zone file ({:?}):\n: {}", e, &zone_file);
+                eprintln!("failed to parse zone file ({:?}):\n: {}", e, zone_file);
             })
             .ok()?;
         let authority =
             InMemoryAuthority::new(zone_name.clone(), records, ZoneType::Primary, false)
                 .inspect_err(|e| {
-                    format!(
+                    eprintln!(
                         "failed to create authority for {}: {:?}",
-                        zone_name.to_string(),
+                        zone_name,
                         e
                     );
                 })
@@ -178,9 +178,7 @@ impl<GetTokenT: GetDnsNostrToken> NostrAuthority<GetTokenT> {
         }
         let query_name = Name::from(name);
         let raw_label = query_name
-            .iter()
-            .skip((query_name.num_labels() - self.origin().num_labels() - 1).into())
-            .next()?;
+            .iter().nth((query_name.num_labels() - self.origin().num_labels() - 1).into())?;
         Label::from_raw_bytes(raw_label).ok()
     }
 
