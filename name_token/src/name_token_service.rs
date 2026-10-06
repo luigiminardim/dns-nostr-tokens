@@ -1,5 +1,5 @@
 use crate::{
-    inscription::{Bytes, Inscription, InscriptionMetadata},
+    inscription::{Bytes, NameTokenPosition},
     name_token::NameToken,
     name_token_repository::NameTokenRepository,
 };
@@ -39,7 +39,7 @@ impl<R: NameTokenRepository> NameTokenService<R> {
     /// Returns the Valid Name-Token of `label` according to the First Confirmed Rule.
     pub async fn get_name_token(&self, label: &Bytes) -> Option<NameToken> {
         let name_tokens_with_label = self.repository.get_name_tokens_by_label(label).await;
-        NameToken::select_valid_name_token(label, &name_tokens_with_label).cloned()
+        NameToken::select_root_token(label, &name_tokens_with_label).cloned()
     }
 
     pub async fn next_block_height(&self) -> u64 {
@@ -55,28 +55,28 @@ impl<R: NameTokenRepository> NameTokenService<R> {
     ) {
         let num_positional_correlations =
             usize::max(transaction.input.len(), transaction.output.len());
-        for positional_correlation in 0..num_positional_correlations {
-            let metadata = InscriptionMetadata {
+        for same_index in 0..num_positional_correlations {
+            let position = NameTokenPosition {
                 txid: transaction.compute_txid(),
-                vout: positional_correlation as u32,
+                vout: same_index as u32,
                 blockheight,
                 blockindex,
             };
-            self.apply_positional_correlation(
-                transaction.input.get(positional_correlation),
-                transaction.output.get(positional_correlation),
-                metadata,
+            self.apply_same_index_chain(
+                transaction.input.get(same_index),
+                transaction.output.get(same_index),
+                position,
                 pending_block_updates,
             )
             .await;
         }
     }
 
-    async fn apply_positional_correlation(
+    async fn apply_same_index_chain(
         &self,
         txin: Option<&TxIn>,
         txout: Option<&TxOut>,
-        metadata: InscriptionMetadata,
+        position: NameTokenPosition,
         pending_block_updates: &mut PendingBlockUpdates,
     ) {
         let input_name_token = match txin {
@@ -86,11 +86,10 @@ impl<R: NameTokenRepository> NameTokenService<R> {
                     .await
             }
         };
-        let output_inscription = txout.and_then(Inscription::from_txout);
-        let updated_name_tokens = NameToken::generate_name_token_updates(
+        let updated_name_tokens = NameToken::process_same_index_chain(
             input_name_token.as_ref(),
-            output_inscription.as_ref(),
-            metadata,
+            txout,
+            &position,
         );
         for updated_name_token in updated_name_tokens {
             pending_block_updates.insert(updated_name_token.last_outpoint(), updated_name_token);
@@ -127,7 +126,7 @@ mod test_name_token_service {
     };
     use std::sync::Mutex;
 
-    use crate::inscription::InscriptionMetadata;
+    use crate::inscription::NameTokenPosition;
 
     #[derive(Default)]
     struct InMemoryNameTokenRepository {
@@ -166,7 +165,7 @@ mod test_name_token_service {
             state.next_block_height = blockheight + 1;
             for updated in updated_name_tokens {
                 state.name_tokens.retain(|stored| {
-                    stored.first_inscription_metadata != updated.first_inscription_metadata
+                    stored.first_position != updated.first_position
                 });
                 if !updated.is_revoked() {
                     state.name_tokens.push(updated.clone());
@@ -249,13 +248,13 @@ mod test_name_token_service {
         }
     }
 
-    fn metadata(
+    fn position(
         blockheight: u64,
         blockindex: usize,
         vout: u32,
         transaction: &Transaction,
-    ) -> InscriptionMetadata {
-        InscriptionMetadata {
+    ) -> NameTokenPosition {
+        NameTokenPosition {
             blockheight,
             blockindex,
             vout,
@@ -278,12 +277,12 @@ mod test_name_token_service {
 
         let name_token = service.get_name_token(&label()).await.unwrap();
         assert_eq!(
-            name_token.first_inscription_metadata,
-            metadata(10, 0, 0, &creation)
+            name_token.first_position,
+            position(10, 0, 0, &creation)
         );
         assert_eq!(
-            name_token.last_inscription_metadata,
-            metadata(10, 0, 0, &creation)
+            name_token.last_position,
+            position(10, 0, 0, &creation)
         );
     }
 
@@ -326,12 +325,12 @@ mod test_name_token_service {
 
         let name_token = service.get_name_token(&label()).await.unwrap();
         assert_eq!(
-            name_token.first_inscription_metadata,
-            metadata(10, 0, 0, &creation)
+            name_token.first_position,
+            position(10, 0, 0, &creation)
         );
         assert_eq!(
-            name_token.last_inscription_metadata,
-            metadata(11, 0, 0, &update)
+            name_token.last_position,
+            position(11, 0, 0, &update)
         );
     }
 
@@ -355,8 +354,8 @@ mod test_name_token_service {
         assert_eq!(service.get_name_token(&label()).await, None);
         let other = service.get_name_token(&b"other".to_vec()).await.unwrap();
         assert_eq!(
-            other.first_inscription_metadata,
-            metadata(11, 0, 0, &relabel)
+            other.first_position,
+            position(11, 0, 0, &relabel)
         );
     }
 
@@ -372,8 +371,8 @@ mod test_name_token_service {
 
         let name_token = service.get_name_token(&label()).await.unwrap();
         assert_eq!(
-            name_token.first_inscription_metadata,
-            metadata(10, 0, 0, &first)
+            name_token.first_position,
+            position(10, 0, 0, &first)
         );
     }
 }

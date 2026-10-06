@@ -23,7 +23,7 @@ inscriptions from Bitcoin and fetching DNS records from the Nostr network.
 
 - **Name-Token**: A UTXO whose `scriptPubKey` contains an `OP_FALSE OP_IF … OP_ENDIF` inscription with a `"name"` header and a label.
 - **DNS-Nostr Token**: A Name-Token with a `"dns-nostr"` protocol section containing a Nostr public key (hex).
-- **First Confirmed Rule**: Among competing inscriptions for the same label, the earliest confirmed, non-revoked one wins.
+- **First-is-Root Uniqueness**: Among competing inscriptions for the same label, the earliest confirmed, non-revoked one wins.
 - **Update = Spend + Reinscribe**: Updating a token means spending its UTXO and creating a new one with the same label.
 - **Revocation = Spend without Reinscription**: Spending a token's UTXO without creating a new inscription for that label.
 
@@ -47,7 +47,7 @@ dns_nostr_server ──▶ name_token ──▶ bitcoin
 ```
 
 `name_token` defines the `NameTokenRepository` port and the `NameTokenService`
-(`apply_block`, `get_name_token`). `dns_nostr_server` implements the port with
+`NameTokenService` (`apply_block`, `get_name_token`). `dns_nostr_server` implements the port with
 SQLite (`SqliteNameTokenRepository`) and feeds blocks from Bitcoin Core into the
 service (`BlockchainWatcher`). `main.rs` wires them together.
 
@@ -210,7 +210,7 @@ cargo test -p name_token
 
 Key test files:
 - `name_token/src/inscription.rs` — inscription parsing, metadata ordering
-- `name_token/src/name_token.rs` — token lifecycle (create/update/revoke), valid-token selection
+- `name_token/src/name_token.rs` — token lifecycle (mint/update/revoke), valid-token selection
 - `name_token/src/name_token_service.rs` — block application and label resolution against an in-memory repository fake
 - Other modules follow the same pattern with `#[cfg(test)]` blocks
 
@@ -237,7 +237,7 @@ Key test files:
 ### Naming
 
 - Structs: `PascalCase` (e.g., `NameToken`, `InscriptionSection`)
-- Functions: `snake_case` (e.g., `generate_name_token_updates`, `select_valid_name_token`)
+- Functions: `snake_case` (e.g., `process_same_index_chain`, `select_root_token`)
 - Test modules: `test_<concept>` (e.g., `test_inscription`, `test_name_token`)
 - Files: `snake_case.rs` matching the module name
 
@@ -280,4 +280,4 @@ Per `.gitignore`:
 
 - The DNS-Nostr Wallet component described in the README **does not exist yet**. Do not create stubs or scaffolding for it unless explicitly asked.
 - The Name-Token protocol is general-purpose; `dns-nostr` is just one protocol section type. The code is designed to support multiple protocol sections per inscription.
-- Positional correlation matters for updates: the Nth input spending a token must correspond to the Nth output reinscribing it (see `generate_name_token_updates`).
+- Continuity via Same-Index Chain matters for updates: the Nth input spending a token must correspond to the Nth output reinscribing it (see `process_same_index_chain`).

@@ -13,7 +13,7 @@ pub struct InscriptionSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct InscriptionMetadata {
+pub struct NameTokenPosition {
     /// The block height containing the transaction.
     pub blockheight: u64,
 
@@ -28,13 +28,13 @@ pub struct InscriptionMetadata {
 }
 
 #[cfg(test)]
-mod test_inscription_metadata {
+mod test_name_token_position {
     use super::*;
     use bitcoin::{hashes::Hash, Txid};
 
     #[test]
     fn test_inscription_ordering() {
-        let older = InscriptionMetadata {
+        let older = NameTokenPosition {
             blockheight: 0,
             blockindex: 0,
             vout: 0,
@@ -42,15 +42,15 @@ mod test_inscription_metadata {
         };
         let sorted_vec = vec![
             older.clone(),
-            InscriptionMetadata {
+            NameTokenPosition {
                 vout: 1,
                 ..older.clone()
             },
-            InscriptionMetadata {
+            NameTokenPosition {
                 blockindex: 1,
                 ..older.clone()
             },
-            InscriptionMetadata {
+            NameTokenPosition {
                 blockheight: 1,
                 ..older.clone()
             },

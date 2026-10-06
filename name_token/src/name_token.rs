@@ -1,12 +1,12 @@
-use crate::inscription::{Bytes, Inscription, InscriptionMetadata};
-use bitcoin::OutPoint;
+use crate::inscription::{Bytes, Inscription, NameTokenPosition};
+use bitcoin::{OutPoint, TxOut};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameToken {
     pub label: Bytes,
-    pub first_inscription_metadata: InscriptionMetadata,
-    pub last_inscription_metadata: InscriptionMetadata,
+    pub first_position: NameTokenPosition,
+    pub last_position: NameTokenPosition,
     pub inscription: Option<Inscription>,
 }
 
@@ -25,23 +25,23 @@ pub enum UpdateNameTokenError {
 impl NameToken {
     pub fn new(
         label: Bytes,
-        first_inscription_metadata: InscriptionMetadata,
-        last_inscription_metadata: InscriptionMetadata,
+        first_position: NameTokenPosition,
+        last_position: NameTokenPosition,
         inscription: Inscription,
     ) -> NameToken {
         NameToken {
             label,
-            first_inscription_metadata,
-            last_inscription_metadata,
+            first_position,
+            last_position,
             inscription: Some(inscription),
         }
     }
 
-    pub fn create(inscription: Inscription, metadata: InscriptionMetadata) -> NameToken {
+    fn mint(position: NameTokenPosition, inscription: Inscription) -> NameToken {
         NameToken {
             label: inscription.label.clone(),
-            first_inscription_metadata: metadata.clone(),
-            last_inscription_metadata: metadata,
+            first_position: position.clone(),
+            last_position: position,
             inscription: Some(inscription),
         }
     }
@@ -52,8 +52,8 @@ impl NameToken {
 
     pub fn last_outpoint(&self) -> OutPoint {
         OutPoint {
-            txid: self.last_inscription_metadata.txid,
-            vout: self.last_inscription_metadata.vout,
+            txid: self.last_position.txid,
+            vout: self.last_position.vout,
         }
     }
 
@@ -72,7 +72,7 @@ impl NameToken {
     pub fn update(
         &self,
         inscription: Inscription,
-        metadata: InscriptionMetadata,
+        position: NameTokenPosition,
     ) -> Result<NameToken, UpdateNameTokenError> {
         if inscription.label != self.label {
             return Err(UpdateNameTokenError::LabelMismatch);
@@ -80,13 +80,13 @@ impl NameToken {
         if self.is_revoked() {
             return Err(UpdateNameTokenError::Revoked);
         }
-        if self.last_inscription_metadata.cmp(&metadata) != Ordering::Less {
+        if self.last_position.cmp(&position) != Ordering::Less {
             return Err(UpdateNameTokenError::StaleInscription);
         }
         Ok(NameToken {
             label: self.label.clone(),
-            first_inscription_metadata: self.first_inscription_metadata.clone(),
-            last_inscription_metadata: metadata,
+            first_position: self.first_position.clone(),
+            last_position: position,
             inscription: Some(inscription),
         })
     }
@@ -94,40 +94,41 @@ impl NameToken {
     pub fn revoke(&self) -> NameToken {
         NameToken {
             label: self.label.clone(),
-            first_inscription_metadata: self.first_inscription_metadata.clone(),
-            last_inscription_metadata: self.last_inscription_metadata.clone(),
+            first_position: self.first_position.clone(),
+            last_position: self.last_position.clone(),
             inscription: None,
         }
     }
 
-    pub fn generate_name_token_updates(
+    pub fn process_same_index_chain(
         input_name_token: Option<&NameToken>,
-        output_inscription: Option<&Inscription>,
-        metadata: InscriptionMetadata,
+        output: Option<&TxOut>,
+        position: &NameTokenPosition,
     ) -> Vec<NameToken> {
+        let output_inscription = output.and_then(Inscription::from_txout);
         match (input_name_token, output_inscription) {
             (None, None) => vec![],
             (Some(input_name_token), None) => {
-                let revoked_name_token = input_name_token.clone();
+                let revoked_name_token = input_name_token.revoke();
                 vec![revoked_name_token]
             }
             (None, Some(output_inscription)) => {
-                let created_name_token = NameToken::create(output_inscription.clone(), metadata);
-                vec![created_name_token]
+                let minted_name_token = NameToken::mint(position.clone(), output_inscription);
+                vec![minted_name_token]
             }
             (Some(input_name_token), Some(output_inscription)) => {
-                match input_name_token.update(output_inscription.clone(), metadata.clone()) {
+                match input_name_token.update(output_inscription.clone(), position.clone()) {
                     Ok(updated_name_token) => vec![updated_name_token],
                     Err(UpdateNameTokenError::LabelMismatch) => {
                         let revoked_name_token = input_name_token.revoke();
-                        let created_name_token =
-                            NameToken::create(output_inscription.clone(), metadata);
-                        vec![revoked_name_token, created_name_token]
+                        let minted_name_token =
+                            NameToken::mint(position.clone(), output_inscription);
+                        vec![revoked_name_token, minted_name_token]
                     }
                     Err(UpdateNameTokenError::Revoked) => {
-                        let created_name_token =
-                            NameToken::create(output_inscription.clone(), metadata);
-                        vec![created_name_token]
+                        let minted_name_token =
+                            NameToken::mint(position.clone(), output_inscription);
+                        vec![minted_name_token]
                     }
                     Err(UpdateNameTokenError::StaleInscription) => {
                         vec![]
@@ -137,7 +138,7 @@ impl NameToken {
         }
     }
 
-    pub fn select_valid_name_token<'a>(
+    pub fn select_root_token<'a>(
         label: &Bytes,
         name_tokens: impl IntoIterator<Item = &'a NameToken>,
     ) -> Option<&'a NameToken> {
@@ -146,9 +147,9 @@ impl NameToken {
             .filter(|nt| &nt.label == label)
             .filter(|nt| !nt.is_revoked())
             .min_by(|a, b| {
-                InscriptionMetadata::cmp(
-                    &a.first_inscription_metadata,
-                    &b.first_inscription_metadata,
+                NameTokenPosition::cmp(
+                    &a.first_position,
+                    &b.first_position,
                 )
             })
     }
@@ -165,7 +166,7 @@ mod test_name_token {
         let label = b"label".to_vec();
 
         // Token creation
-        let metadata = InscriptionMetadata {
+        let position = NameTokenPosition {
             blockheight: 1,
             blockindex: 0,
             vout: 0,
@@ -175,26 +176,28 @@ mod test_name_token {
             protocol: b"section-0".to_vec(),
             arguments: vec![b"arg1".to_vec(), b"arg2".to_vec()],
         };
-        let name_token = NameToken::create(
+        let name_token = NameToken::new(
+            label.clone(),
+            position.clone(),
+            position.clone(),
             Inscription {
                 label: label.clone(),
                 sections: vec![section_0],
             },
-            metadata.clone(),
         );
 
         // Check initial state
         assert_eq!(name_token.label, b"label");
-        assert_eq!(name_token.first_inscription_metadata.blockheight, 1);
-        assert_eq!(name_token.last_inscription_metadata.blockheight, 1);
+        assert_eq!(name_token.first_position.blockheight, 1);
+        assert_eq!(name_token.last_position.blockheight, 1);
         assert!(!name_token.is_revoked());
         assert!(name_token.protocol_args(&b"section-0".into()).is_some());
         assert!(name_token.protocol_args(&b"nonexistent".into()).is_none());
 
         // Update with a new inscription
-        let metadata = InscriptionMetadata {
+        let position = NameTokenPosition {
             blockheight: 2,
-            ..metadata.clone()
+            ..position.clone()
         };
         let section_1 = InscriptionSection {
             protocol: b"section-1".into(),
@@ -206,14 +209,14 @@ mod test_name_token {
                     label: label.clone(),
                     sections: vec![section_1],
                 },
-                metadata.clone(),
+                position.clone(),
             )
             .unwrap();
 
         // Check updated state
         assert_eq!(updated_token.label, b"label");
-        assert_eq!(updated_token.first_inscription_metadata.blockheight, 1);
-        assert_eq!(updated_token.last_inscription_metadata.blockheight, 2);
+        assert_eq!(updated_token.first_position.blockheight, 1);
+        assert_eq!(updated_token.last_position.blockheight, 2);
         assert!(!updated_token.is_revoked());
         assert!(updated_token.protocol_args(&b"section-0".into()).is_none());
         assert!(updated_token.protocol_args(&b"section-1".into()).is_some());
@@ -221,15 +224,15 @@ mod test_name_token {
         // Revoke the token
         let revoked_token = updated_token.revoke();
         assert_eq!(revoked_token.label, b"label");
-        assert_eq!(revoked_token.first_inscription_metadata.blockheight, 1);
-        assert_eq!(revoked_token.last_inscription_metadata.blockheight, 2);
+        assert_eq!(revoked_token.first_position.blockheight, 1);
+        assert_eq!(revoked_token.last_position.blockheight, 2);
         assert!(revoked_token.is_revoked());
         assert!(revoked_token.protocol_args(&b"section-0".into()).is_none());
         assert!(revoked_token.protocol_args(&b"section-1".into()).is_none());
     }
 
     #[test]
-    fn test_select_valid_name_token() {
+    fn test_select_root_token() {
         let label = Bytes::from(b"label");
         let inscription = Inscription {
             label: label.clone(),
@@ -238,44 +241,40 @@ mod test_name_token {
                 arguments: vec![b"arg1".into(), b"arg2".into()],
             }],
         };
-        let first_name_token = NameToken::create(
-            inscription.clone(),
-            InscriptionMetadata {
-                blockheight: 1,
-                blockindex: 0,
-                vout: 0,
-                txid: Txid::all_zeros(),
-            },
-        );
-        let second_name_token = NameToken::create(
-            inscription.clone(),
-            InscriptionMetadata {
-                blockheight: 1,
-                blockindex: 1,
-                vout: 0,
-                txid: Txid::all_zeros(),
-            },
-        );
-        let third_name_token = NameToken::create(
-            inscription.clone(),
-            InscriptionMetadata {
-                blockheight: 1,
-                blockindex: 1,
-                vout: 1,
-                txid: Txid::all_zeros(),
-            },
-        );
-        let fourth_name_token = NameToken::create(
-            inscription.clone(),
-            InscriptionMetadata {
-                blockheight: 2,
-                blockindex: 0,
-                vout: 0,
-                txid: Txid::all_zeros(),
-            },
-        );
+        let pos1 = NameTokenPosition {
+            blockheight: 1,
+            blockindex: 0,
+            vout: 0,
+            txid: Txid::all_zeros(),
+        };
+        let first_name_token = NameToken::new(label.clone(), pos1.clone(), pos1.clone(), inscription.clone());
+        
+        let pos2 = NameTokenPosition {
+            blockheight: 1,
+            blockindex: 1,
+            vout: 0,
+            txid: Txid::all_zeros(),
+        };
+        let second_name_token = NameToken::new(label.clone(), pos2.clone(), pos2.clone(), inscription.clone());
+
+        let pos3 = NameTokenPosition {
+            blockheight: 1,
+            blockindex: 1,
+            vout: 1,
+            txid: Txid::all_zeros(),
+        };
+        let third_name_token = NameToken::new(label.clone(), pos3.clone(), pos3.clone(), inscription.clone());
+
+        let pos4 = NameTokenPosition {
+            blockheight: 2,
+            blockindex: 0,
+            vout: 0,
+            txid: Txid::all_zeros(),
+        };
+        let fourth_name_token = NameToken::new(label.clone(), pos4.clone(), pos4.clone(), inscription.clone());
+
         assert_eq!(
-            NameToken::select_valid_name_token(
+            NameToken::select_root_token(
                 &label,
                 vec![
                     &fourth_name_token,
@@ -290,7 +289,7 @@ mod test_name_token {
         let first_name_token = first_name_token
             .update(
                 inscription,
-                InscriptionMetadata {
+                NameTokenPosition {
                     blockheight: 2,
                     blockindex: 0,
                     vout: 1,
@@ -299,7 +298,7 @@ mod test_name_token {
             )
             .unwrap();
         assert_eq!(
-            NameToken::select_valid_name_token(
+            NameToken::select_root_token(
                 &label,
                 vec![
                     &fourth_name_token,

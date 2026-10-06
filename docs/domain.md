@@ -15,10 +15,10 @@
 | **Inscription** | The `OP_FALSE OP_IF … OP_ENDIF` data envelope embedded in a UTXO's `scriptPubKey`. Contains a header (`"name"`) and one or more **Inscription Sections**. |
 | **Inscription Section** | A typed segment within an Inscription. Each section has a protocol identifier (e.g., `"dns-nostr"`) and protocol-specific data. |
 | **DNS-Nostr Token** | A Name-Token that contains a `"dns-nostr"` Inscription Section. The section data is a Nostr public key (hex-encoded). |
-| **First Confirmed Rule** | The conflict-resolution rule: among competing inscriptions for the same Label, the earliest confirmed (lowest block height, then lowest transaction index), non-revoked one wins. |
-| **Update** | Spending a Name-Token's UTXO and creating a new UTXO with the same Label in the same transaction. Positional correlation: the Nth input must correspond to the Nth output. |
+| **First-is-Root Uniqueness** | The conflict-resolution rule: among competing inscriptions for the same Label, the earliest confirmed (lowest block height, then lowest transaction index), non-revoked one wins. |
+| **Update** | Spending a Name-Token's UTXO and creating a new UTXO with the same Label in the same transaction. Continuity via Same-Index Chain: the Nth input must correspond to the Nth output. |
 | **Revocation** | Spending a Name-Token's UTXO without creating a new inscription for that Label. The name becomes unowned. |
-| **Valid Name-Token** | The Name-Token selected by the First Confirmed Rule for a given Label — the one the system treats as authoritative. |
+| **Valid Name-Token** | The Name-Token selected by the First-is-Root Uniqueness rule for a given Label — the one the system treats as authoritative. |
 | **Zone** | The DNS domain under which subdomains are resolved (e.g., `nostr.dns.name.`). Labels become subdomains of this zone. |
 | **Name-Token Service** | Domain service (`NameTokenService`) that applies confirmed blocks to the Name-Token state (`apply_block`) and resolves a Label to its Valid Name-Token (`get_name_token`). Lives in the `name_token` crate. |
 | **Name-Token Repository** | Port (`NameTokenRepository` trait) defined by the domain and implemented by outer layers (e.g., SQLite); stores Name-Tokens and the next block height to apply. |
@@ -60,11 +60,11 @@
 
 ### Lifecycle
 
-1. **Creation** — A transaction inscribes a new Name-Token UTXO with a Label.
+1. **Minting** — A transaction inscribes a new Name-Token UTXO with a Label.
 2. **Conflict Resolution** — If multiple inscriptions claim the same Label, the
-   First Confirmed Rule picks the valid one.
+   First-is-Root Uniqueness rule picks the valid one.
 3. **Update** — The owner spends the UTXO and reinscribes the same Label in a
-   new output (positional correlation: Nth input ↔ Nth output).
+   new output (Continuity via Same-Index Chain: Nth input ↔ Nth output).
 4. **Revocation** — The owner spends the UTXO without reinscribing. The Label
    becomes unowned.
 
@@ -74,7 +74,7 @@
 DNS query for <label>.nostr.dns.name.
         │
         ▼
-  Find valid Name-Token for <label>  (First Confirmed Rule)
+  Find valid Name-Token for <label>  (First-is-Root Uniqueness)
         │
         ▼
   Extract nostr_pubkey from "dns-nostr" section

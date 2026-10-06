@@ -3,7 +3,7 @@ use bitcoin::{
     hex::{Case, DisplayHex, FromHex},
     OutPoint, Txid,
 };
-use name_token::{Bytes, Inscription, InscriptionMetadata, NameToken, NameTokenRepository};
+use name_token::{Bytes, Inscription, NameTokenPosition, NameToken, NameTokenRepository};
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},
@@ -80,13 +80,13 @@ fn name_token_from_row(row: &rusqlite::Row) -> NameToken {
     let last_txid: String = row.get(8).unwrap();
     let inscription_json: String = row.get(9).unwrap();
     NameToken {
-        first_inscription_metadata: InscriptionMetadata {
+        first_position: NameTokenPosition {
             txid: Txid::from_str(&first_txid).expect("Invalid Txid"),
             vout: first_vout,
             blockheight: first_blockheight,
             blockindex: first_blockindex,
         },
-        last_inscription_metadata: InscriptionMetadata {
+        last_position: NameTokenPosition {
             txid: Txid::from_str(&last_txid).expect("Invalid Txid"),
             vout: last_vout,
             blockheight: last_blockheight,
@@ -153,9 +153,9 @@ impl NameTokenRepository for SqliteNameTokenRepository {
                         AND first_blockindex = ?2
                         AND first_vout = ?3",
                     rusqlite::params![
-                        &updated_token.first_inscription_metadata.blockheight,
-                        &updated_token.first_inscription_metadata.blockindex,
-                        &updated_token.first_inscription_metadata.vout,
+                        &updated_token.first_position.blockheight,
+                        &updated_token.first_position.blockindex,
+                        &updated_token.first_position.vout,
                     ],
                 )
                 .expect("Failed to delete old name token");
@@ -178,14 +178,14 @@ impl NameTokenRepository for SqliteNameTokenRepository {
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     rusqlite::params![
                         updated_token.label.to_hex_string(Case::Lower),
-                        updated_token.first_inscription_metadata.blockheight,
-                        updated_token.first_inscription_metadata.blockindex,
-                        updated_token.first_inscription_metadata.vout,
-                        updated_token.first_inscription_metadata.txid.to_string(),
-                        updated_token.last_inscription_metadata.blockheight,
-                        updated_token.last_inscription_metadata.blockindex,
-                        updated_token.last_inscription_metadata.vout,
-                        updated_token.last_inscription_metadata.txid.to_string(),
+                        updated_token.first_position.blockheight,
+                        updated_token.first_position.blockindex,
+                        updated_token.first_position.vout,
+                        updated_token.first_position.txid.to_string(),
+                        updated_token.last_position.blockheight,
+                        updated_token.last_position.blockindex,
+                        updated_token.last_position.vout,
+                        updated_token.last_position.txid.to_string(),
                         serde_json::to_string(&updated_token.inscription)
                             .expect("Failed to serialize inscription"),
                     ],

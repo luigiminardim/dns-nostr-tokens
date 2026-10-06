@@ -53,24 +53,27 @@ mod tests {
     use bitcoin::{hashes::Hash, Txid};
 
     use super::*;
-    use name_token::{Inscription, InscriptionMetadata, InscriptionSection, NameToken};
+    use name_token::{Inscription, NameTokenPosition, InscriptionSection, NameToken};
 
     #[test]
     fn test_try_from_name_token() {
         let nostr_pubkey = PublicKey::from_slice(&[0; 32]).unwrap();
-        let name_token = NameToken::create(
+        let position = NameTokenPosition {
+            blockheight: 0,
+            blockindex: 0,
+            vout: 0,
+            txid: Txid::all_zeros(),
+        };
+        let name_token = NameToken::new(
+            b"domain".to_vec(),
+            position.clone(),
+            position.clone(),
             Inscription {
                 label: b"domain".into(),
                 sections: vec![InscriptionSection {
                     protocol: b"dns-nostr".into(),
                     arguments: vec![nostr_pubkey.to_bytes().into()],
                 }],
-            },
-            InscriptionMetadata {
-                blockheight: 0,
-                blockindex: 0,
-                vout: 0,
-                txid: Txid::all_zeros(),
             },
         );
         let dns_nostr_token = DnsNostrToken::try_from(name_token).unwrap();
