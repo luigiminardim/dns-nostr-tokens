@@ -138,11 +138,7 @@ impl<GetTokenT: GetDnsNostrToken> NostrAuthority<GetTokenT> {
         let authority =
             InMemoryAuthority::new(zone_name.clone(), records, ZoneType::Primary, false)
                 .inspect_err(|e| {
-                    eprintln!(
-                        "failed to create authority for {}: {:?}",
-                        zone_name,
-                        e
-                    );
+                    eprintln!("failed to create authority for {}: {:?}", zone_name, e);
                 })
                 .ok()?;
         Some(authority)
@@ -178,7 +174,8 @@ impl<GetTokenT: GetDnsNostrToken> NostrAuthority<GetTokenT> {
         }
         let query_name = Name::from(name);
         let raw_label = query_name
-            .iter().nth((query_name.num_labels() - self.origin().num_labels() - 1).into())?;
+            .iter()
+            .nth((query_name.num_labels() - self.origin().num_labels() - 1).into())?;
         Label::from_raw_bytes(raw_label).ok()
     }
 

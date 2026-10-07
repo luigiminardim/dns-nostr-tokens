@@ -1,24 +1,14 @@
 use async_trait::async_trait;
+use bdk_chain::BlockId;
 use bitcoin::{
     hex::{Case, DisplayHex, FromHex},
-    OutPoint, Txid,
+    BlockHash, OutPoint,
 };
-use name_token::{Bytes, Inscription, NameTokenPosition, NameToken, NameTokenRepository};
+use name_token::{Bytes, Label, NameToken, NameTokenEvent, NameTokenRepository};
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-
-const NAME_TOKEN_COLUMNS: &str = "label_hex,
-    first_blockheight,
-    first_blockindex,
-    first_vout,
-    first_txid,
-    last_blockheight,
-    last_blockindex,
-    last_vout,
-    last_txid,
-    inscription_json";
 
 #[derive(Clone)]
 pub struct SqliteNameTokenRepository {
@@ -40,9 +30,17 @@ impl SqliteNameTokenRepository {
         let mut connection = self.connection.lock().unwrap();
         let transaction = connection.transaction().unwrap();
         transaction
+            .execute("DROP TABLE IF EXISTS state", [])
+            .unwrap();
+        transaction
+            .execute("DROP TABLE IF EXISTS name_token_versions", [])
+            .unwrap();
+
+        transaction
             .execute(
-                "CREATE TABLE IF NOT EXISTS state (
-                next_block_height UNSIGNED INTEGER NOT NULL
+                "CREATE TABLE IF NOT EXISTS chain_checkpoints (
+                height UNSIGNED INTEGER NOT NULL,
+                blockhash CHAR(64) NOT NULL
             )",
                 [],
             )
@@ -50,54 +48,30 @@ impl SqliteNameTokenRepository {
         transaction
             .execute(
                 "CREATE TABLE IF NOT EXISTS name_tokens (
-                label_hex TEXT NOT NULL,
-                first_blockheight UNSIGNED INTEGER NOT NULL,
-                first_blockindex UNSIGNED INTEGER NOT NULL,
-                first_vout UNSIGNED INTEGER NOT NULL,
                 first_txid CHAR(64) NOT NULL,
-                last_blockheight UNSIGNED INTEGER NOT NULL,
-                last_blockindex UNSIGNED INTEGER NOT NULL,
-                last_vout UNSIGNED INTEGER NOT NULL,
+                first_vout UNSIGNED INTEGER NOT NULL,
+                label_hex TEXT NOT NULL,
+                events_json TEXT NOT NULL,
                 last_txid CHAR(64) NOT NULL,
-                inscription_json TEXT NOT NULL
+                last_vout UNSIGNED INTEGER NOT NULL,
+                PRIMARY KEY (first_txid, first_vout)
             )",
                 [],
             )
             .unwrap();
-        transaction.commit().expect("Failed to create state table");
+        transaction.commit().expect("Failed to create tables");
     }
 }
 
 fn name_token_from_row(row: &rusqlite::Row) -> NameToken {
     let label_hex: String = row.get(0).unwrap();
-    let first_blockheight: u64 = row.get(1).unwrap();
-    let first_blockindex: usize = row.get(2).unwrap();
-    let first_vout: u32 = row.get(3).unwrap();
-    let first_txid: String = row.get(4).unwrap();
-    let last_blockheight: u64 = row.get(5).unwrap();
-    let last_blockindex: usize = row.get(6).unwrap();
-    let last_vout: u32 = row.get(7).unwrap();
-    let last_txid: String = row.get(8).unwrap();
-    let inscription_json: String = row.get(9).unwrap();
-    NameToken {
-        first_position: NameTokenPosition {
-            txid: Txid::from_str(&first_txid).expect("Invalid Txid"),
-            vout: first_vout,
-            blockheight: first_blockheight,
-            blockindex: first_blockindex,
-        },
-        last_position: NameTokenPosition {
-            txid: Txid::from_str(&last_txid).expect("Invalid Txid"),
-            vout: last_vout,
-            blockheight: last_blockheight,
-            blockindex: last_blockindex,
-        },
-        label: Bytes::from_hex(&label_hex).expect("Invalid label hex"),
-        inscription: Some(
-            serde_json::from_str::<Inscription>(&inscription_json)
-                .expect("Failed to parse inscription JSON"),
-        ),
-    }
+    let events_json: String = row.get(1).unwrap();
+    let events: Vec<NameTokenEvent> =
+        serde_json::from_str(&events_json).expect("Failed to parse events JSON");
+    NameToken::new(
+        Label::from(Bytes::from_hex(&label_hex).expect("Invalid label hex")),
+        events,
+    )
 }
 
 #[async_trait]
@@ -105,104 +79,180 @@ impl NameTokenRepository for SqliteNameTokenRepository {
     async fn get_name_token_by_outpoint(&self, outpoint: OutPoint) -> Option<NameToken> {
         let connection = self.connection.lock().unwrap();
         let mut statement = connection
-            .prepare(&format!(
-                "SELECT {NAME_TOKEN_COLUMNS}
-                FROM name_tokens
-                WHERE last_txid = ?1 AND last_vout = ?2"
-            ))
+            .prepare(
+                "SELECT label_hex, events_json FROM name_tokens WHERE last_txid = ?1 AND last_vout = ?2",
+            )
             .unwrap();
         let params = rusqlite::params![outpoint.txid.to_string(), outpoint.vout];
         let mut rows = statement.query(params).unwrap();
-        rows.next().unwrap().map(name_token_from_row)
+        rows.next().unwrap().map(|r| name_token_from_row(r))
     }
 
-    async fn get_name_tokens_by_label(&self, label: &Bytes) -> Vec<NameToken> {
+    async fn get_name_tokens_by_label(&self, label: &Label) -> Vec<NameToken> {
         let connection = self.connection.lock().unwrap();
         let mut statement = connection
-            .prepare(&format!(
-                "SELECT {NAME_TOKEN_COLUMNS} FROM name_tokens WHERE label_hex = ?1"
-            ))
+            .prepare("SELECT label_hex, events_json FROM name_tokens WHERE label_hex = ?1")
             .unwrap();
-        let params = rusqlite::params![&label.to_hex_string(Case::Lower)];
+        let params = rusqlite::params![&label.as_ref().to_vec().to_hex_string(Case::Lower)];
         let name_tokens = statement
             .query_map(params, |row| Ok(name_token_from_row(row)))
             .expect("Failed to query name tokens");
         name_tokens.filter_map(Result::ok).collect()
     }
 
-    async fn save_block_updates(&self, blockheight: u64, updated_name_tokens: &[NameToken]) {
-        let next_block_height = blockheight + 1;
+    async fn save_block_updates(
+        &self,
+        block_hash: BlockHash,
+        height: u32,
+        updated_name_tokens: &[NameToken],
+    ) {
         let mut connection = self.connection.lock().unwrap();
         let transaction = connection.transaction().unwrap();
-        // remove old block height
-        transaction
-            .execute("DELETE FROM state", [])
-            .expect("Failed to delete old state");
-        // insert new block height
+
         transaction
             .execute(
-                "INSERT INTO state (next_block_height) VALUES (?1)",
-                [&next_block_height],
+                "INSERT INTO chain_checkpoints (height, blockhash) VALUES (?1, ?2)",
+                rusqlite::params![height, block_hash.to_string()],
             )
-            .expect("Failed to insert new block height");
+            .expect("Failed to insert chain checkpoint");
+
         for updated_token in updated_name_tokens {
-            transaction
-                .execute(
-                    "DELETE FROM name_tokens
-                    WHERE first_blockheight = ?1 
-                        AND first_blockindex = ?2
-                        AND first_vout = ?3",
-                    rusqlite::params![
-                        &updated_token.first_position.blockheight,
-                        &updated_token.first_position.blockindex,
-                        &updated_token.first_position.vout,
-                    ],
-                )
-                .expect("Failed to delete old name token");
-            if updated_token.is_revoked() {
-                continue; // Just remove revoked name tokens
-            }
+            let events_json = serde_json::to_string(&updated_token.events)
+                .expect("Failed to serialize events");
+
             transaction
                 .execute(
                     "INSERT INTO name_tokens (
-                        label_hex,
-                        first_blockheight,
-                        first_blockindex,
-                        first_vout,
                         first_txid,
-                        last_blockheight,
-                        last_blockindex,
-                        last_vout,
+                        first_vout,
+                        label_hex,
+                        events_json,
                         last_txid,
-                        inscription_json
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        last_vout
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    ON CONFLICT(first_txid, first_vout) DO UPDATE SET
+                        events_json=excluded.events_json,
+                        last_txid=excluded.last_txid,
+                        last_vout=excluded.last_vout",
                     rusqlite::params![
-                        updated_token.label.to_hex_string(Case::Lower),
-                        updated_token.first_position.blockheight,
-                        updated_token.first_position.blockindex,
-                        updated_token.first_position.vout,
-                        updated_token.first_position.txid.to_string(),
-                        updated_token.last_position.blockheight,
-                        updated_token.last_position.blockindex,
-                        updated_token.last_position.vout,
-                        updated_token.last_position.txid.to_string(),
-                        serde_json::to_string(&updated_token.inscription)
-                            .expect("Failed to serialize inscription"),
+                        updated_token.first_position().txid().to_string(),
+                        updated_token.first_position().vout(),
+                        updated_token.label.as_ref().to_vec().to_hex_string(Case::Lower),
+                        events_json,
+                        updated_token.last_position().txid().to_string(),
+                        updated_token.last_position().vout(),
                     ],
                 )
-                .expect("Failed to insert new name token");
+                .expect("Failed to upsert name token");
         }
         transaction.commit().expect("Failed to commit transaction");
     }
 
-    async fn get_next_block_height(&self) -> u64 {
+    async fn get_name_tokens_by_block(&self, block_id: BlockId) -> Vec<NameToken> {
         let connection = self.connection.lock().unwrap();
         let mut statement = connection
-            .prepare("SELECT next_block_height FROM state")
+            .prepare("SELECT label_hex, events_json FROM name_tokens")
             .unwrap();
         let mut rows = statement.query([]).unwrap();
-        rows.next().unwrap().map_or(0, |row| {
-            row.get(0).expect("Failed to get next block height")
-        })
+        
+        let mut affected = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            let token = name_token_from_row(row);
+            if token.last_position().block_id() == block_id {
+                affected.push(token);
+            }
+        }
+        affected
+    }
+
+    async fn undo_block_updates(&self, block_id: BlockId, updated_name_tokens: &[NameToken]) {
+        let mut connection = self.connection.lock().unwrap();
+        let transaction = connection.transaction().unwrap();
+
+        let mut tokens_to_delete = Vec::new();
+        {
+            let mut statement = transaction
+                .prepare("SELECT first_txid, first_vout, events_json FROM name_tokens")
+                .unwrap();
+            let mut rows = statement.query([]).unwrap();
+
+            while let Some(row) = rows.next().unwrap() {
+                let first_txid: String = row.get(0).unwrap();
+                let first_vout: u32 = row.get(1).unwrap();
+                let events_json: String = row.get(2).unwrap();
+                let events: Vec<NameTokenEvent> = serde_json::from_str(&events_json).unwrap();
+                
+                if let Some(last_event) = events.last() {
+                    if last_event.position().block_id() == block_id {
+                        tokens_to_delete.push((first_txid, first_vout));
+                    }
+                }
+            }
+        }
+
+        for (txid, vout) in tokens_to_delete {
+            transaction
+                .execute(
+                    "DELETE FROM name_tokens WHERE first_txid = ?1 AND first_vout = ?2",
+                    rusqlite::params![txid, vout],
+                )
+                .unwrap();
+        }
+
+        for updated_token in updated_name_tokens {
+            let events_json = serde_json::to_string(&updated_token.events)
+                .expect("Failed to serialize events");
+
+            transaction
+                .execute(
+                    "INSERT INTO name_tokens (
+                        first_txid,
+                        first_vout,
+                        label_hex,
+                        events_json,
+                        last_txid,
+                        last_vout
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    ON CONFLICT(first_txid, first_vout) DO UPDATE SET
+                        events_json=excluded.events_json,
+                        last_txid=excluded.last_txid,
+                        last_vout=excluded.last_vout",
+                    rusqlite::params![
+                        updated_token.first_position().txid().to_string(),
+                        updated_token.first_position().vout(),
+                        updated_token.label.as_ref().to_vec().to_hex_string(Case::Lower),
+                        events_json,
+                        updated_token.last_position().txid().to_string(),
+                        updated_token.last_position().vout(),
+                    ],
+                )
+                .expect("Failed to upsert name token");
+        }
+
+        let hash_str = block_id.hash.to_string();
+        transaction
+            .execute(
+                "DELETE FROM chain_checkpoints WHERE height = ?1 AND blockhash = ?2",
+                rusqlite::params![block_id.height, hash_str],
+            )
+            .expect("Failed to undo chain checkpoint");
+
+        transaction.commit().expect("Failed to commit undo");
+    }
+
+    async fn get_chain(&self) -> Vec<BlockId> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection
+            .prepare("SELECT height, blockhash FROM chain_checkpoints ORDER BY height ASC")
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        let mut chain = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            let height: u32 = row.get(0).unwrap();
+            let blockhash_str: String = row.get(1).unwrap();
+            let hash = BlockHash::from_str(&blockhash_str).unwrap();
+            chain.push(BlockId { height, hash });
+        }
+        chain
     }
 }

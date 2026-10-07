@@ -12,58 +12,11 @@ pub struct InscriptionSection {
     pub arguments: Vec<Bytes>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NameTokenPosition {
-    /// The block height containing the transaction.
-    pub blockheight: u64,
-
-    /// The index of the transaction in the block.
-    pub blockindex: usize,
-
-    /// output index of the transaction.
-    pub vout: u32,
-
-    /// The transaction ID.
-    pub txid: bitcoin::Txid,
-}
-
-#[cfg(test)]
-mod test_name_token_position {
-    use super::*;
-    use bitcoin::{hashes::Hash, Txid};
-
-    #[test]
-    fn test_inscription_ordering() {
-        let older = NameTokenPosition {
-            blockheight: 0,
-            blockindex: 0,
-            vout: 0,
-            txid: Txid::all_zeros(),
-        };
-        let sorted_vec = vec![
-            older.clone(),
-            NameTokenPosition {
-                vout: 1,
-                ..older.clone()
-            },
-            NameTokenPosition {
-                blockindex: 1,
-                ..older.clone()
-            },
-            NameTokenPosition {
-                blockheight: 1,
-                ..older.clone()
-            },
-        ];
-        let mut vec = sorted_vec.clone();
-        vec.sort();
-        assert_eq!(vec, sorted_vec);
-    }
-}
+use crate::Label;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Inscription {
-    pub label: Bytes,
+    pub label: Label,
     pub sections: Vec<InscriptionSection>,
 }
 
@@ -75,7 +28,7 @@ impl Inscription {
     }
 }
 
-fn parse_inscription(instructions: &mut Instructions) -> Option<(Bytes, Vec<InscriptionSection>)> {
+fn parse_inscription(instructions: &mut Instructions) -> Option<(Label, Vec<InscriptionSection>)> {
     let (label, has_more) = parse_header(instructions)?;
     let mut sections: Vec<InscriptionSection> = Vec::new();
     if !has_more {
@@ -94,7 +47,7 @@ fn parse_inscription(instructions: &mut Instructions) -> Option<(Bytes, Vec<Insc
 /// Parse the inscription header.
 /// If the header is not valid, return `None`.
 /// If the header is valid, return the label and a boolean indicating if there is more to parse.
-fn parse_header(instructions: &mut Instructions) -> Option<(Bytes, bool)> {
+fn parse_header(instructions: &mut Instructions) -> Option<(Label, bool)> {
     match instructions.next()? {
         Ok(Instruction::PushBytes(push_bytes)) if push_bytes.is_empty() => {}
         _ => return None,
@@ -109,7 +62,7 @@ fn parse_header(instructions: &mut Instructions) -> Option<(Bytes, bool)> {
         return None;
     }
     let label = header_section.arguments.first()?;
-    Some((label.clone(), has_more))
+    Some((label.clone().into(), has_more))
 }
 
 /// Parse a section from the instructions.
@@ -187,7 +140,7 @@ mod test_inscription {
             script_pubkey,
         };
         let inscription = Inscription::from_txout(&txout).unwrap();
-        assert_eq!(inscription.label, b"label");
+        assert_eq!(inscription.label.as_ref(), b"label");
         assert_eq!(inscription.sections.len(), 2);
         assert_eq!(inscription.sections[0].protocol, b"protocol-0");
         assert_eq!(inscription.sections[0].arguments.len(), 2);

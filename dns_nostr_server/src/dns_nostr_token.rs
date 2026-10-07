@@ -19,7 +19,7 @@ impl TryFrom<NameToken> for DnsNostrToken {
     type Error = DnsNostrTokenFromNameTokenError;
 
     fn try_from(value: NameToken) -> Result<Self, Self::Error> {
-        let label = match Label::from_raw_bytes(&value.label) {
+        let label = match Label::from_raw_bytes(value.label.as_ref()) {
             Err(_) => Err(DnsNostrTokenFromNameTokenError::InvalidLabel),
             Ok(label) => {
                 let lower_name_label = label.to_lowercase();
@@ -50,31 +50,32 @@ impl TryFrom<NameToken> for DnsNostrToken {
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::{hashes::Hash, Txid};
+    use bitcoin::{hashes::Hash, Txid, BlockHash};
+    use bdk_chain::BlockId;
 
     use super::*;
-    use name_token::{Inscription, NameTokenPosition, InscriptionSection, NameToken};
+    use name_token::{Inscription, InscriptionSection, NameToken, Position};
 
     #[test]
     fn test_try_from_name_token() {
         let nostr_pubkey = PublicKey::from_slice(&[0; 32]).unwrap();
-        let position = NameTokenPosition {
-            blockheight: 0,
-            blockindex: 0,
-            vout: 0,
-            txid: Txid::all_zeros(),
-        };
+        let position = Position::new(
+            BlockId { height: 0, hash: BlockHash::all_zeros() },
+            0,
+            bitcoin::OutPoint { txid: Txid::all_zeros(), vout: 0 },
+        );
         let name_token = NameToken::new(
-            b"domain".to_vec(),
-            position.clone(),
-            position.clone(),
-            Inscription {
-                label: b"domain".into(),
-                sections: vec![InscriptionSection {
-                    protocol: b"dns-nostr".into(),
-                    arguments: vec![nostr_pubkey.to_bytes().into()],
-                }],
-            },
+            name_token::Label::from(&b"domain"[..]),
+            vec![name_token::NameTokenEvent::Minted {
+                position: position.clone(),
+                inscription: Inscription {
+                    label: name_token::Label::from(&b"domain"[..]),
+                    sections: vec![InscriptionSection {
+                        protocol: b"dns-nostr".into(),
+                        arguments: vec![nostr_pubkey.to_bytes().into()],
+                    }],
+                },
+            }],
         );
         let dns_nostr_token = DnsNostrToken::try_from(name_token).unwrap();
         assert_eq!(dns_nostr_token.label.to_string(), "domain");

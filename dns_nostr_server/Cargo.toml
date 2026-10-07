@@ -21,3 +21,5 @@ nostr-sdk = "0.41.0"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde_json.workspace = true
 tokio.workspace = true
+bdk_bitcoind_rpc = "0.22.0"
+bdk_chain = "0.23.3"
