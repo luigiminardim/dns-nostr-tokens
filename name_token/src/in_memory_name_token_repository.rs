@@ -33,7 +33,7 @@ impl NameTokenRepository for InMemoryNameTokenRepository {
         state
             .name_tokens
             .iter()
-            .filter(|nt| &nt.label == label)
+            .filter(|nt| nt.label() == label)
             .cloned()
             .collect()
     }

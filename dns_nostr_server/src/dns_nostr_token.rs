@@ -19,7 +19,7 @@ impl TryFrom<NameToken> for DnsNostrToken {
     type Error = DnsNostrTokenFromNameTokenError;
 
     fn try_from(value: NameToken) -> Result<Self, Self::Error> {
-        let label = match Label::from_raw_bytes(value.label.as_ref()) {
+        let label = match Label::from_raw_bytes(value.label().as_ref()) {
             Err(_) => Err(DnsNostrTokenFromNameTokenError::InvalidLabel),
             Ok(label) => {
                 let lower_name_label = label.to_lowercase();

@@ -117,7 +117,7 @@ impl NameTokenRepository for SqliteNameTokenRepository {
             .expect("Failed to insert chain checkpoint");
 
         for updated_token in updated_name_tokens {
-            let events_json = serde_json::to_string(&updated_token.events)
+            let events_json = serde_json::to_string(updated_token.events())
                 .expect("Failed to serialize events");
 
             transaction
@@ -137,7 +137,7 @@ impl NameTokenRepository for SqliteNameTokenRepository {
                     rusqlite::params![
                         updated_token.first_position().txid().to_string(),
                         updated_token.first_position().vout(),
-                        updated_token.label.as_ref().to_vec().to_hex_string(Case::Lower),
+                        updated_token.label().as_ref().to_vec().to_hex_string(Case::Lower),
                         events_json,
                         updated_token.last_position().txid().to_string(),
                         updated_token.last_position().vout(),
@@ -200,7 +200,7 @@ impl NameTokenRepository for SqliteNameTokenRepository {
         }
 
         for updated_token in updated_name_tokens {
-            let events_json = serde_json::to_string(&updated_token.events)
+            let events_json = serde_json::to_string(updated_token.events())
                 .expect("Failed to serialize events");
 
             transaction
@@ -220,7 +220,7 @@ impl NameTokenRepository for SqliteNameTokenRepository {
                     rusqlite::params![
                         updated_token.first_position().txid().to_string(),
                         updated_token.first_position().vout(),
-                        updated_token.label.as_ref().to_vec().to_hex_string(Case::Lower),
+                        updated_token.label().as_ref().to_vec().to_hex_string(Case::Lower),
                         events_json,
                         updated_token.last_position().txid().to_string(),
                         updated_token.last_position().vout(),

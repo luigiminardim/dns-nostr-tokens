@@ -32,8 +32,8 @@ impl NameTokenEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameToken {
-    pub label: Label,
-    pub events: Vec<NameTokenEvent>,
+    label: Label,
+    events: Vec<NameTokenEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +61,14 @@ impl NameToken {
                 inscription,
             }],
         }
+    }
+
+    pub fn label(&self) -> &Label {
+        &self.label
+    }
+
+    pub fn events(&self) -> &[NameTokenEvent] {
+        &self.events
     }
 
     pub fn first_position(&self) -> &Position {
@@ -247,7 +255,7 @@ mod test_name_token {
             inscription(b"label", &[b"section-0"]),
         );
 
-        assert_eq!(token.label.as_ref(), b"label");
+        assert_eq!(token.label().as_ref(), b"label");
         assert_eq!(token.first_position(), &position(1, 0, 0));
         assert_eq!(token.last_position(), &position(1, 0, 0));
         assert!(!token.is_revoked());
@@ -266,7 +274,7 @@ mod test_name_token {
             .update(inscription(b"label", &[b"section-1"]), position(2, 0, 0))
             .unwrap();
 
-        assert_eq!(updated.label.as_ref(), b"label");
+        assert_eq!(updated.label().as_ref(), b"label");
         assert_eq!(updated.first_position(), &position(1, 0, 0));
         assert_eq!(updated.last_position(), &position(2, 0, 0));
         assert!(!updated.is_revoked());
@@ -283,7 +291,7 @@ mod test_name_token {
 
         let revoked = token.revoke(position(2, 0, 0));
 
-        assert_eq!(revoked.label.as_ref(), b"label");
+        assert_eq!(revoked.label().as_ref(), b"label");
         assert_eq!(revoked.first_position(), &position(1, 0, 0));
         assert_eq!(revoked.last_position(), &position(2, 0, 0));
         assert!(revoked.is_revoked());
@@ -428,7 +436,7 @@ mod test_name_token {
         );
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].label.as_ref(), b"label");
+        assert_eq!(result[0].label().as_ref(), b"label");
         assert_eq!(result[0].first_position(), &position(2, 0, 0));
         assert!(!result[0].is_revoked());
     }
@@ -447,7 +455,7 @@ mod test_name_token {
         );
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].label.as_ref(), b"label");
+        assert_eq!(result[0].label().as_ref(), b"label");
         assert_eq!(result[0].first_position(), &position(1, 0, 0));
         assert_eq!(result[0].last_position(), &position(2, 0, 0));
         assert!(!result[0].is_revoked());
@@ -467,10 +475,10 @@ mod test_name_token {
         );
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].label.as_ref(), b"label");
+        assert_eq!(result[0].label().as_ref(), b"label");
         assert!(result[0].is_revoked());
         
-        assert_eq!(result[1].label.as_ref(), b"other");
+        assert_eq!(result[1].label().as_ref(), b"other");
         assert!(!result[1].is_revoked());
         assert_eq!(result[1].first_position(), &position(2, 0, 0));
     }
@@ -490,7 +498,7 @@ mod test_name_token {
         );
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].label.as_ref(), b"label");
+        assert_eq!(result[0].label().as_ref(), b"label");
         assert_eq!(result[0].first_position(), &position(3, 0, 0));
         assert!(!result[0].is_revoked());
     }
