@@ -13,7 +13,7 @@ use tokio::net::UdpSocket;
 
 #[tokio::main]
 async fn main() {
-    let name_token_repository = SqliteNameTokenRepository::create().await;
+    let name_token_repository = Box::new(SqliteNameTokenRepository::create().await);
     let name_token_service = Arc::new(NameTokenService::new(name_token_repository).await);
     BlockchainWatcher::new(name_token_service.clone()).spawn();
     let dns_nostr_token_repository = DnsNostrTokenRepository::new(name_token_service);

@@ -11,13 +11,13 @@ use std::{collections::HashMap, sync::Mutex};
 /// Name-Tokens changed earlier in the block being applied, keyed by their first outpoint.
 type PendingBlockUpdates = HashMap<OutPoint, NameToken>;
 
-pub struct NameTokenService<R: NameTokenRepository> {
-    repository: R,
+pub struct NameTokenService {
+    repository: Box<dyn NameTokenRepository>,
     chain: Mutex<Option<LocalChain>>,
 }
 
-impl<R: NameTokenRepository> NameTokenService<R> {
-    pub async fn new(repository: R) -> Self {
+impl NameTokenService {
+    pub async fn new(repository: Box<dyn NameTokenRepository>) -> Self {
         let chain_points = repository.get_chain().await;
         let mut chain = None;
         if !chain_points.is_empty() {
@@ -197,8 +197,8 @@ mod test_name_token_service {
 
 
 
-    async fn new_service() -> NameTokenService<crate::InMemoryNameTokenRepository> {
-        NameTokenService::new(crate::InMemoryNameTokenRepository::default()).await
+    async fn new_service() -> NameTokenService {
+        NameTokenService::new(Box::new(crate::InMemoryNameTokenRepository::default())).await
     }
 
     fn inscription_script(label: &[u8]) -> ScriptBuf {

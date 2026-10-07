@@ -2,18 +2,18 @@ use std::{future::Future, sync::Arc};
 
 use crate::dns_nostr_token::DnsNostrToken;
 use hickory_server::proto::rr::domain::Label;
-use name_token::{Bytes, NameTokenRepository, NameTokenService};
+use name_token::{Bytes, NameTokenService};
 
 pub trait GetDnsNostrToken: Send + Sync {
     fn get_token(&self, label: &Label) -> impl Future<Output = Option<DnsNostrToken>> + Send;
 }
 
-pub struct DnsNostrTokenRepository<R: NameTokenRepository> {
-    name_token_service: Arc<NameTokenService<R>>,
+pub struct DnsNostrTokenRepository {
+    name_token_service: Arc<NameTokenService>,
 }
 
-impl<R: NameTokenRepository> DnsNostrTokenRepository<R> {
-    pub fn new(name_token_service: Arc<NameTokenService<R>>) -> Self {
+impl DnsNostrTokenRepository {
+    pub fn new(name_token_service: Arc<NameTokenService>) -> Self {
         DnsNostrTokenRepository { name_token_service }
     }
 
@@ -28,7 +28,7 @@ impl<R: NameTokenRepository> DnsNostrTokenRepository<R> {
     }
 }
 
-impl<R: NameTokenRepository> GetDnsNostrToken for DnsNostrTokenRepository<R> {
+impl GetDnsNostrToken for DnsNostrTokenRepository {
     async fn get_token(&self, label: &Label) -> Option<DnsNostrToken> {
         self.get_token(label).await
     }

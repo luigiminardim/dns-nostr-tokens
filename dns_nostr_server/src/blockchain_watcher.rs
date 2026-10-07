@@ -2,18 +2,18 @@ use bdk_bitcoind_rpc::{
     bitcoincore_rpc::{Auth, Client, RpcApi},
     Emitter,
 };
-use name_token::{NameTokenRepository, NameTokenService};
+use name_token::NameTokenService;
 use std::{sync::Arc, time::Duration};
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(10); // sync every 10 seconds since we can handle reorgs
 
 /// Feeds connected blocks from Bitcoin Core into the `NameTokenService`.
-pub struct BlockchainWatcher<R: NameTokenRepository + 'static> {
-    name_token_service: Arc<NameTokenService<R>>,
+pub struct BlockchainWatcher {
+    name_token_service: Arc<NameTokenService>,
 }
 
-impl<R: NameTokenRepository + 'static> BlockchainWatcher<R> {
-    pub fn new(name_token_service: Arc<NameTokenService<R>>) -> Self {
+impl BlockchainWatcher {
+    pub fn new(name_token_service: Arc<NameTokenService>) -> Self {
         Self { name_token_service }
     }
 
