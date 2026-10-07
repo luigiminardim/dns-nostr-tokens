@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 name_token = { path = "../name_token" }
+dns_nostr_token = { path = "../dns_nostr_token" }
 async-trait.workspace = true
 bitcoin.workspace = true
 bitcoincore-rpc = "0.19.0"

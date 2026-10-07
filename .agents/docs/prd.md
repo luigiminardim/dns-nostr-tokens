@@ -1,40 +1,41 @@
 # Product Requirements Document (PRD)
 
 ## Title & Status
-**Title:** Refactor `NameTokenService` to use Dynamic Dispatch
+**Title:** Extract `dns_nostr_token` Domain Crate
 **Status:** Draft
 
 ## Problem Statement & Motivation
-Currently, `NameTokenService` uses a generic type parameter (`<R: NameTokenRepository>`) to define its persistence dependency. In Rust, generics are "viral"—any struct that contains `NameTokenService` must also become generic over `R`. This propagates all the way up to the composition root (e.g., `main.rs`, `BlockchainWatcher`, etc.), leading to noisy code signatures, complex bounds, and a rigid architecture that is difficult to compose or test dynamically.
-
-By moving from static dispatch (generics) to dynamic dispatch (trait objects), we can encapsulate the repository dependency and dramatically simplify the service's signature and the signatures of all downstream consumers.
+Currently, the `dns-nostr-token` domain logic—which interprets Name-Token inscriptions to extract Nostr public keys—is entangled within the `dns_nostr_server` crate. Because there are upcoming plans to build new applications, such as a DNS-Nostr Wallet, leaving this core domain logic embedded in the server crate creates improper coupling. We need a proactive structural cleanup to decouple the DNS-Nostr domain logic from the server infrastructure.
 
 ## Target Audience
 - Developers and maintainers of the `dns-nostr-tokens` repository.
+- Future downstream applications (like the DNS-Nostr Wallet).
 
 ## Scope & Out of Scope
 **In Scope:**
-- Updating `NameTokenService` struct definition to remove the generic parameter `R` and instead store a `Box<dyn NameTokenRepository>`.
-- Updating `NameTokenService::new` to accept and box the repository.
-- Updating tests in `name_token_service.rs` to reflect the new API.
-- Updating consuming modules (e.g., in `dns_nostr_server`) that currently depend on `NameTokenService<R>` to depend on the simplified `NameTokenService`.
+- Creating a new `dns_nostr_token` library crate in the workspace.
+- Moving `DnsNostrToken` into this new crate as the core aggregate/entity.
+- Creating a `DnsNostrService` inside the new crate that depends on `name_token::NameTokenService` to fetch and translate tokens.
+- Refactoring `dns_nostr_server` to depend on the new `dns_nostr_token` crate instead of housing the logic itself.
+- Updating workspace documentation (`AGENTS.md`, `Cargo.toml`, etc.) to reflect the new architecture.
 
 **Out of Scope:**
-- Changing the `NameTokenRepository` trait definition (aside from ensuring it remains object-safe, which it should already be via `#[async_trait]`).
-- Altering any domain logic or First-is-Root selection rules.
-- Introducing new features or database implementations.
+- Creating a dedicated repository trait/port for `dns_nostr_token` (it will rely purely on `NameTokenService`).
+- Implementing the DNS-Nostr Wallet or any net-new application features.
+- Changing the existing First-is-Root selection logic in `name_token`.
 
 ## User Stories & Requirements
-1. **Developer Experience:** As a developer, I want to instantiate and pass around `NameTokenService` without having to define generic bounds `<R>` on every struct that holds it.
-2. **Technical Requirement 1:** `NameTokenService` must internally hold `Box<dyn NameTokenRepository>` (or similar dynamic reference).
-3. **Technical Requirement 2:** The system must continue to compile and pass all tests without functionality changes.
+1. **Developer Experience:** As a developer, I want to import `dns_nostr_token` in a new application (like a wallet) without being forced to pull in `dns_nostr_server` dependencies like DNS handling (`hickory-server`) or Nostr relay interaction logic.
+2. **Technical Requirement 1:** The `dns_nostr_token` crate must define a `DnsNostrService` that takes a reference to `NameTokenService` (or similar) to fetch tokens.
+3. **Technical Requirement 2:** The system must continue to compile and pass all tests (`cargo test --workspace`) without functionality changes from the perspective of the DNS server.
 
 ## Success Metrics (KPIs)
-- **Zero generic parameters** on `NameTokenService`.
+- **Zero infrastructure dependencies** inside the new `dns_nostr_token` crate.
 - **100% pass rate** for the existing test suite (`cargo test --workspace`).
-- Reduction in generic bounds boilerplate across the `dns_nostr_server` crate.
+- The `dns_nostr_server` successfully delegates token extraction to the new crate.
 
 ## Technical Impact & Codebase Survey
-- **`name_token/src/name_token_service.rs`**: Core struct definition and implementation block must drop the `<R>` parameter.
-- **`dns_nostr_server/src/blockchain_watcher.rs`** (and potentially other consumers): Will need type signatures simplified to drop `<R>`.
-- **Performance:** Dynamic dispatch introduces a negligible vtable lookup cost on repository calls, which is perfectly acceptable here since repository calls are asynchronous database/network I/O operations anyway.
+- **New Crate:** `dns_nostr_token` must be added to the Cargo workspace.
+- **`dns_nostr_server/src/dns_nostr_token.rs` & `dns_nostr_token_repository.rs`**: These files will be removed/refactored, moving their core logic into the new crate.
+- **`dns_nostr_server/Cargo.toml`**: Will need a dependency on `dns_nostr_token`.
+- **`AGENTS.md`**: Must be updated to document the new crate in the Repository Structure and Architecture sections.

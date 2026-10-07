@@ -463,12 +463,24 @@ dependencies = [
  "bdk_chain",
  "bitcoin",
  "bitcoincore-rpc",
+ "dns_nostr_token",
  "hickory-server",
  "name_token",
  "nostr-sdk",
  "rusqlite",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "dns_nostr_token"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "bdk_chain",
+ "bitcoin",
+ "name_token",
+ "nostr-sdk",
 ]
 
 [[package]]

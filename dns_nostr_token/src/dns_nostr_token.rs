@@ -1,8 +1,8 @@
-use hickory_server::proto::rr::domain::Label;
+use crate::label::{InvalidLabel, Label};
 use name_token::NameToken;
 use nostr_sdk::PublicKey;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DnsNostrToken {
     pub label: Label,
     pub nostr_pubkey: PublicKey,
@@ -10,26 +10,22 @@ pub struct DnsNostrToken {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnsNostrTokenFromNameTokenError {
-    InvalidLabel,
+    InvalidLabel(InvalidLabel),
     MissingProtocolArgs,
     InvalidPublicKey,
+    InvalidUtf8Label,
 }
 
 impl TryFrom<NameToken> for DnsNostrToken {
     type Error = DnsNostrTokenFromNameTokenError;
 
     fn try_from(value: NameToken) -> Result<Self, Self::Error> {
-        let label = match Label::from_raw_bytes(value.label().as_ref()) {
-            Err(_) => Err(DnsNostrTokenFromNameTokenError::InvalidLabel),
-            Ok(label) => {
-                let lower_name_label = label.to_lowercase();
-                if lower_name_label != label {
-                    Err(DnsNostrTokenFromNameTokenError::InvalidLabel)
-                } else {
-                    Ok(label)
-                }
-            }
-        }?;
+        let label_str = std::str::from_utf8(value.label().as_ref())
+            .map_err(|_| DnsNostrTokenFromNameTokenError::InvalidUtf8Label)?;
+            
+        let label = Label::new(label_str)
+            .map_err(DnsNostrTokenFromNameTokenError::InvalidLabel)?;
+
         let protocol_args = match value.protocol_args(&b"dns-nostr".into()) {
             None => Err(DnsNostrTokenFromNameTokenError::MissingProtocolArgs),
             Some(args) => Ok(args),
@@ -78,6 +74,31 @@ mod tests {
             }],
         );
         let dns_nostr_token = DnsNostrToken::try_from(name_token).unwrap();
-        assert_eq!(dns_nostr_token.label.to_string(), "domain");
+        assert_eq!(dns_nostr_token.label.as_str(), "domain");
+    }
+    
+    #[test]
+    fn test_try_from_invalid_label() {
+        let nostr_pubkey = PublicKey::from_slice(&[0; 32]).unwrap();
+        let position = Position::new(
+            BlockId { height: 0, hash: BlockHash::all_zeros() },
+            0,
+            bitcoin::OutPoint { txid: Txid::all_zeros(), vout: 0 },
+        );
+        let name_token = NameToken::new(
+            name_token::Label::from(&b"1domain"[..]),
+            vec![name_token::NameTokenEvent::Minted {
+                position: position.clone(),
+                inscription: Inscription {
+                    label: name_token::Label::from(&b"1domain"[..]),
+                    sections: vec![InscriptionSection {
+                        protocol: b"dns-nostr".into(),
+                        arguments: vec![nostr_pubkey.to_bytes().into()],
+                    }],
+                },
+            }],
+        );
+        let err = DnsNostrToken::try_from(name_token).unwrap_err();
+        assert_eq!(err, DnsNostrTokenFromNameTokenError::InvalidLabel(InvalidLabel::InvalidStartCharacter));
     }
 }
