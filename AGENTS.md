@@ -1,9 +1,11 @@
 # AGENTS.md
 
 > This project is a work-in-progress. The codebase currently contains the
-> `name_token` (domain library) and `dns_nostr_server` crates. The DNS-Nostr
-> Wallet described in the README does not exist yet. All guidance below applies
-> to **what is built today**.
+> `name_token` and `dns_nostr_token` (domain libraries), `dns_nostr_server` and
+> `dns_nostr_wallet` crates. The wallet currently only creates/imports a BIP39
+> seed and derives addresses and keys; token operations and send/receive are not
+> built yet (see [`docs/wallet.md`](docs/wallet.md) for the design). All guidance
+> below applies to **what is built today**.
 
 > **Agent orchestration rules** (workflow, core principles, behavioral guardrails)
 > are defined in [`.agents/rules/agent-orchestration.md`](.agents/rules/agent-orchestration.md)
@@ -40,16 +42,28 @@ by looking up the label's Name-Token on Bitcoin, extracting the Nostr pubkey,
 and fetching DNS records from a Nostr relay.
 
 The Name-Token domain lives in the standalone `name_token` crate (depends only
-on `bitcoin`, `serde`, `async-trait`). Dependencies point inward:
+on `bitcoin`, `serde`, `async-trait`). `dns_nostr_token` holds the DNS-Nostr
+specifics (`Label`, `DnsNostrToken`, `DnsNostrService`). Dependencies point inward:
 
 ```
-dns_nostr_server ──▶ name_token ──▶ bitcoin
+dns_nostr_server ──▶ dns_nostr_token ──▶ name_token ──▶ bitcoin
+dns_nostr_wallet ──▶ dns_nostr_token (Label) ──▶ name_token
 ```
 
 `name_token` defines the `NameTokenRepository` port and the `NameTokenService`
-`NameTokenService` (`apply_block`, `get_name_token`). `dns_nostr_server` implements the port with
+(`apply_block`, `get_name_token`). `dns_nostr_server` implements the port with
 SQLite (`SqliteNameTokenRepository`) and feeds blocks from Bitcoin Core into the
 service (`BlockchainWatcher`). `main.rs` wires them together.
+
+`dns_nostr_wallet` is a CLI whose source is split by layer (dependencies point
+inward: `adapters` → `application` → `domain`):
+
+- `domain/` — `DnsNostrWallet` entity (embeds `bdk_wallet::Wallet` for keychain index management,
+  address generation, and protocol derivation for Name-Tokens and Nostr keys).
+- `application/` — one use case per file (`CreateWallet`, `ImportWallet`,
+  `GetReceiveAddress`), each with its own error enum.
+- `adapters/` — `EnvironmentConfig`, clap `cli`.
+- `main.rs` — composition root (opens SQLite database, wires dependencies).
 
 ---
 
@@ -116,14 +130,15 @@ functions, clean error handling, and co-located tests.
 
 ```
 dns-nostr-tokens/
-├── Cargo.toml                    # Workspace root (members: name_token, dns_nostr_server; shared [workspace.dependencies])
+├── Cargo.toml                    # Workspace root (members: name_token, dns_nostr_server, dns_nostr_token, dns_nostr_wallet; shared [workspace.dependencies])
 ├── Cargo.lock
 ├── README.md
 ├── docker-compose.yml            # Bitcoin regtest + Nostr relay
 ├── .gitignore
 │
 ├── docs/
-│   └── domain.md                 # Ubiquitous language & high-level domain model (DDD)
+│   ├── domain.md                 # Ubiquitous language & high-level domain model (DDD)
+│   └── wallet.md                 # DNS-Nostr Wallet design (key derivation, transactions, Nostr publishing)
 │
 ├── name_token/                   # Core domain library (no infrastructure dependencies)
 │   ├── Cargo.toml
@@ -134,25 +149,41 @@ dns-nostr-tokens/
 │       ├── name_token_repository.rs  # NameTokenRepository async trait (port)
 │       └── name_token_service.rs # NameTokenService: apply_block, get_name_token, next_block_height
 │
-├── dns_nostr_server/             # DNS server application (depends on name_token)
+├── dns_nostr_token/              # DNS-Nostr domain library (depends on name_token)
+│   └── src/
+│       ├── lib.rs
+│       ├── label.rs              # Label (RFC-1034 validation)
+│       ├── dns_nostr_token.rs    # DNS-Nostr-specific token logic (extracts npub from sections)
+│       └── dns_nostr_service.rs  # DnsNostrService: DNS-Nostr tokens from NameTokenService
+│
+├── dns_nostr_server/             # DNS server application (depends on name_token, dns_nostr_token)
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs               # Composition root — wires the DNS server on UDP :1053
 │       ├── lib.rs                # Module declarations
 │       ├── sqlite_name_token_repository.rs  # SQLite implementation of name_token::NameTokenRepository
 │       ├── blockchain_watcher.rs # Bitcoin Core RPC sync loop feeding blocks to NameTokenService
-│       ├── dns_nostr_token.rs    # DNS-Nostr-specific token logic (extracts npub from sections)
-│       ├── dns_nostr_token_repository.rs  # Queries NameTokenService for DNS-Nostr tokens
 │       ├── nostr_authority.rs    # Hickory Authority impl — handles DNS lookups via Nostr
 │       └── nostr_events_repository.rs  # Fetches DNS record events from a Nostr relay
+│
+├── dns_nostr_wallet/             # Wallet CLI (depends on dns_nostr_token); layered source
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs               # Composition root — env config → SQLite → adapters → use cases → CLI
+│       ├── lib.rs                # Declares the three layers
+│       ├── domain/               # dns_nostr_wallet.rs
+│       ├── application/          # create_wallet.rs, import_wallet.rs, get_receive_address.rs (one use case per file)
+│       └── adapters/             # environment_config.rs, cli.rs
 │
 ├── regtest_node/                 # Docker image for Bitcoin Core in regtest mode
 │   ├── Dockerfile
 │   ├── bitcoin.conf              # regtest=1, RPC credentials: rpcuser/rpcpassword
 │   └── entry_point.sh            # Starts bitcoind, creates miner wallet, mines blocks
 │
-└── data/
-    └── zone-files/               # (currently empty)
+├── data/
+│   └── zone-files/               # (currently empty)
+│
+└── .data/                        # (gitignored) local runtime data, e.g. .data/dns-nostr-wallet/seed.txt
 ```
 
 ---
@@ -212,6 +243,9 @@ Key test files:
 - `name_token/src/inscription.rs` — inscription parsing, metadata ordering
 - `name_token/src/name_token.rs` — token lifecycle (mint/update/revoke), valid-token selection
 - `name_token/src/name_token_service.rs` — block application and label resolution against an in-memory repository fake
+- `dns_nostr_wallet/src/domain/*` — `DnsNostrWallet` derivation paths (BIP 84 standard, BIP 44 token/Nostr), `hash31`, address/Nostr-key vectors, and SQLite state persistence
+- `dns_nostr_wallet/src/application/*` — use cases against in-memory SQLite connections
+- `dns_nostr_wallet/src/adapters/*` — env config, CLI parsing and controller with in-memory SQLite connections
 - Other modules follow the same pattern with `#[cfg(test)]` blocks
 
 ### Integration testing (manual)
@@ -258,12 +292,19 @@ Key test files:
 - DNS zone is hardcoded to `nostr.dns.name.`.
 - The server listens on UDP port `1053`.
 
+### Wallet configuration (environment variables)
+
+- `DNS_NOSTR_NETWORK` — `regtest` (default), `testnet` or `mainnet`; selects the address network and the BIP 44/84 coin type (`0'` mainnet, `1'` otherwise).
+- `DNS_NOSTR_WALLET_DIR` — wallet directory, default `./.data/dns-nostr-wallet` (relative to the working directory). The wallet state is stored in `<dir>/wallet.sqlite` (mode `0600`, never overwritten on create/import).
+- Usage: `cargo run -p dns_nostr_wallet -- wallet create | import [WORDS...] | address [--index N]` (`import` reads the phrase from stdin when no words are given).
+
 ### Files to never commit
 
 Per `.gitignore`:
 - `target/` — Rust build artifacts
 - `.env` — environment variables
-- `*.sqlite` — local daabase files
+- `*.sqlite` — local database files
+- `.data/` — local runtime data, including the wallet `wallet.sqlite`
 
 ---
 
@@ -278,6 +319,6 @@ Per `.gitignore`:
 
 ## Additional Notes
 
-- The DNS-Nostr Wallet component described in the README **does not exist yet**. Do not create stubs or scaffolding for it unless explicitly asked.
+- The DNS-Nostr Wallet is only partially built (seed create/import, receive address, key derivation). Do not add token operations, UTXO scanning or send/receive unless explicitly asked; see the dedicated issues.
 - The Name-Token protocol is general-purpose; `dns-nostr` is just one protocol section type. The code is designed to support multiple protocol sections per inscription.
 - Continuity via Same-Index Chain matters for updates: the Nth input spending a token must correspond to the Nth output reinscribing it (see `process_same_index_chain`).

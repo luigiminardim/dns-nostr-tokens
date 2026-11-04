@@ -4,6 +4,7 @@ members = [
     "./name_token",
     "./dns_nostr_server",
     "./dns_nostr_token",
+    "./dns_nostr_wallet",
 ]
 
 [workspace.dependencies]

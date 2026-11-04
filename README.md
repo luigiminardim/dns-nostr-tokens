@@ -51,6 +51,21 @@ based on these Name-Tokens.
 - **Subdomain Resolution:** Specifically resolves subdomains formed by combining a registered label with the server owner's configured domain (e.g., `label.nostr.dns.app`). It fetches DNS records from a specific Nostr relay using the associated Nostr public key obtained from the Name-Token's inscription on the Bitcoin blockchain.
 - **Support for Standard DNS Records:** Plans to support common DNS record types (A, AAAA, CNAME, NS, MX, TXT) for these subdomains.
 
+### Wallet CLI (work in progress)
+
+Only seed management and address derivation are available so far. Design details
+are in [`docs/wallet.md`](docs/wallet.md).
+
+```bash
+cargo run -p dns_nostr_wallet -- wallet create             # new 12-word BIP39 seed
+cargo run -p dns_nostr_wallet -- wallet import <WORDS...>  # or pipe the phrase via stdin
+cargo run -p dns_nostr_wallet -- wallet address --index 0  # receive address
+```
+
+Configuration is read from `DNS_NOSTR_NETWORK` (`regtest` by default, `testnet`,
+`mainnet`) and `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`; the
+seed is stored in plain text as `seed.txt`).
+
 ## Architecture
 
 ```mermaid
