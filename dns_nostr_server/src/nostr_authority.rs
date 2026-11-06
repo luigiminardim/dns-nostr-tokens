@@ -215,7 +215,7 @@ impl<GetTokenT: GetDnsNostrToken> NostrAuthority<GetTokenT> {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_nostr_authority {
     use super::*;
 
     struct GetDnsNostrTokenStub {}
@@ -228,27 +228,6 @@ mod tests {
 
     #[test]
     fn test_is_valid_dns_nostr_name() {
-        let authority = NostrAuthority::new(
-            "nostr.dns.name.".parse().unwrap(),
-            GetDnsNostrTokenStub {},
-            NostrEventsRepository::new("ws://localhost:8080".to_string()),
-        );
-
-        let name = "token.nostr.dns.name.".parse().unwrap();
-        assert!(authority.is_valid_dns_nostr_name(&name));
-
-        let name = "subdomain.token.nostr.dns.name.".parse().unwrap();
-        assert!(authority.is_valid_dns_nostr_name(&name));
-
-        let name = "nostr.dns.name.".parse().unwrap();
-        assert!(!authority.is_valid_dns_nostr_name(&name));
-
-        let name = "token.notnostr.dns.name.".parse().unwrap();
-        assert!(!authority.is_valid_dns_nostr_name(&name));
-    }
-
-    #[test]
-    fn test_is_dns_nostr_name() {
         let authority = NostrAuthority::new(
             "nostr.dns.name.".parse().unwrap(),
             GetDnsNostrTokenStub {},

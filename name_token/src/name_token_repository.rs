@@ -19,7 +19,7 @@ pub trait NameTokenRepository: Send + Sync {
         updated_name_tokens: &[NameToken],
     );
 
-    /// Removes all Name-Token events produced by a block and removes the block from chain checkpoints.
+    /// Retrieves all Name-Tokens whose last event occurred in `block_id`.
     async fn get_name_tokens_by_block(&self, block_id: BlockId) -> Vec<NameToken>;
 
     /// Atomically un-applies a block's updates by replacing them with `updated_name_tokens` and removes the block from chain checkpoints.

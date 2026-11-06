@@ -4,7 +4,7 @@
 > `name_token` and `dns_nostr_token` (domain libraries), `dns_nostr_server` and
 > `dns_nostr_wallet` crates. The wallet currently only creates/imports a BIP39
 > seed and derives addresses and keys; token operations and send/receive are not
-> built yet (see [`docs/wallet.md`](docs/wallet.md) for the design). All guidance
+> built yet. All guidance
 > below applies to **what is built today**.
 
 > **Agent orchestration rules** (workflow, core principles, behavioral guardrails)
@@ -15,55 +15,54 @@
 
 ## Project Overview
 
-DNS-Nostr Tokens implements the **Name-Token** protocol — a system for managing
-unique names on the Bitcoin blockchain via UTXO inscriptions. The current focus
-is a specific application called **DNS-Nostr**: operators of DNS servers can
-resolve subdomains (e.g., `blog.nostr.dns.app`) by reading Name-Token
-inscriptions from Bitcoin and fetching DNS records from the Nostr network.
+DNS-Nostr Tokens implements the **Name-Token** protocol: unique names on Bitcoin
+via UTXO inscriptions. The current application is **DNS-Nostr**, where a DNS
+server resolves `<label>.nostr.dns.name.` by reading the label's Name-Token from
+Bitcoin and serving the zone file from the token's Nostr pubkey. Domain terms
+are defined in [`docs/domain.md`](docs/domain.md).
 
-### Key concepts
+### Documentation layout
 
-- **Name-Token**: A UTXO whose `scriptPubKey` contains an `OP_FALSE OP_IF … OP_ENDIF` inscription with a `"name"` header and a label.
-- **DNS-Nostr Token**: A Name-Token with a `"dns-nostr"` protocol section containing a Nostr public key (hex).
-- **First-is-Root Uniqueness**: Among competing inscriptions for the same label, the earliest confirmed, non-revoked one wins.
-- **Update = Spend + Reinscribe**: Updating a token means spending its UTXO and creating a new one with the same label.
-- **Revocation = Spend without Reinscription**: Spending a token's UTXO without creating a new inscription for that label.
+- **`README.md` (root)** is prose for humans who want to understand what the
+  project does. Keep it free of agent-facing material: no directory indexes,
+  contracts, invariants, commands for agents or repository structure. Those
+  belong in this file.
+- **This file (`AGENTS.md`)** is the entry point for agents: architecture,
+  directory contract links, commands and conventions.
+- **Per-directory `README.md` files** hold the EGM contract of each directory
+  (`Interface`, `Invariants`, `Side Effects`, `Verification`). Update them in
+  the same change that alters a directory's public symbols, invariants or side
+  effects.
+- **`docs/domain.md`** is the ubiquitous language and domain model.
 
-### Architecture (current)
-
-```
-DNS Client ──DNS query──▶ dns_nostr_server ──RPC──▶ Bitcoin Node (regtest)
-                                │
-                                └──WebSocket──▶ Nostr Relay
-```
-
-The server resolves subdomains under a configured zone (e.g., `nostr.dns.name.`)
-by looking up the label's Name-Token on Bitcoin, extracting the Nostr pubkey,
-and fetching DNS records from a Nostr relay.
-
-The Name-Token domain lives in the standalone `name_token` crate (depends only
-on `bitcoin`, `serde`, `async-trait`). `dns_nostr_token` holds the DNS-Nostr
-specifics (`Label`, `DnsNostrToken`, `DnsNostrService`). Dependencies point inward:
+### Architecture
 
 ```
-dns_nostr_server ──▶ dns_nostr_token ──▶ name_token ──▶ bitcoin
-dns_nostr_wallet ──▶ dns_nostr_token (Label) ──▶ name_token
+DNS Client ──DNS──▶ dns_nostr_server ──RPC──▶ Bitcoin Node (regtest)
+                           │
+                           └──WebSocket──▶ Nostr Relay
+
+dns_nostr_server ──▶ dns_nostr_token ──▶ name_token
+dns_nostr_wallet ──▶ dns_nostr_token
 ```
 
-`name_token` defines the `NameTokenRepository` port and the `NameTokenService`
-(`apply_block`, `get_name_token`). `dns_nostr_server` implements the port with
-SQLite (`SqliteNameTokenRepository`) and feeds blocks from Bitcoin Core into the
-service (`BlockchainWatcher`). `main.rs` wires them together.
+Dependencies point inward; `main.rs` in each binary crate is the composition
+root. The wallet is only partially built (seed create/import, receive address,
+key derivation): do not add token operations, UTXO scanning or send/receive
+unless explicitly asked.
 
-`dns_nostr_wallet` is a CLI whose source is split by layer (dependencies point
-inward: `adapters` → `application` → `domain`):
+### Subdirectories & Contracts
 
-- `domain/` — `DnsNostrWallet` entity (embeds `bdk_wallet::Wallet` for keychain index management,
-  address generation, and protocol derivation for Name-Tokens and Nostr keys).
-- `application/` — one use case per file (`CreateWallet`, `ImportWallet`,
-  `GetReceiveAddress`), each with its own error enum.
-- `adapters/` — `EnvironmentConfig`, clap `cli`.
-- `main.rs` — composition root (opens SQLite database, wires dependencies).
+| Directory | Contract | Role |
+| --------- | -------- | ---- |
+| `name_token/` | [README](name_token/README.md), [src](name_token/src/README.md) | Name-Token domain, repository port, service |
+| `dns_nostr_token/` | [README](dns_nostr_token/README.md), [src](dns_nostr_token/src/README.md) | `Label`, `DnsNostrToken`, `DnsNostrService` |
+| `dns_nostr_server/` | [README](dns_nostr_server/README.md), [src](dns_nostr_server/src/README.md) | DNS authority, SQLite repository, Bitcoin watcher, Nostr lookups |
+| `dns_nostr_wallet/` | [README](dns_nostr_wallet/README.md), [src](dns_nostr_wallet/src/README.md), [adapters](dns_nostr_wallet/src/adapters/README.md), [application](dns_nostr_wallet/src/application/README.md), [domain](dns_nostr_wallet/src/domain/README.md) | Wallet CLI |
+| `regtest_node/` | [README](regtest_node/README.md) | Bitcoin Core regtest Docker image |
+
+Other: `docs/` (domain model), `report.md` (technical report), `data/zone-files/`
+(example zone), `.data/` (gitignored local runtime data).
 
 ---
 
@@ -110,215 +109,37 @@ functions, clean error handling, and co-located tests.
 
 ---
 
-## Tech Stack
+## Commands
 
-| Layer          | Technology                                                                                      |
-| -------------- | ----------------------------------------------------------------------------------------------- |
-| Language       | Rust (edition 2021)                                                                             |
-| Build system   | Cargo workspace                                                                                 |
-| Async runtime  | Tokio (multi-thread)                                                                            |
-| Bitcoin        | `bitcoin` + `bitcoincore-rpc` crates (RPC to Bitcoin Core)                                      |
-| DNS            | `hickory-server` (UDP authority handler)                                                        |
-| Nostr          | `nostr-sdk` (WebSocket relay client)                                                            |
-| Persistence    | `rusqlite` (bundled SQLite) for caching Name-Token state                                        |
-| Serialization  | `serde` + `serde_json`                                                                          |
-| Dev infra      | Docker Compose — Bitcoin Core regtest node + `nostr-rs-relay`                                   |
-
----
-
-## Repository Structure
-
-```
-dns-nostr-tokens/
-├── Cargo.toml                    # Workspace root (members: name_token, dns_nostr_server, dns_nostr_token, dns_nostr_wallet; shared [workspace.dependencies])
-├── Cargo.lock
-├── README.md
-├── docker-compose.yml            # Bitcoin regtest + Nostr relay
-├── .gitignore
-│
-├── docs/
-│   ├── domain.md                 # Ubiquitous language & high-level domain model (DDD)
-│   └── wallet.md                 # DNS-Nostr Wallet design (key derivation, transactions, Nostr publishing)
-│
-├── name_token/                   # Core domain library (no infrastructure dependencies)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs                # Module declarations + public re-exports
-│       ├── inscription.rs        # Bytes, Inscription, InscriptionSection, InscriptionMetadata, parsing
-│       ├── name_token.rs         # NameToken, UpdateNameTokenError, lifecycle, First Confirmed Rule
-│       ├── name_token_repository.rs  # NameTokenRepository async trait (port)
-│       └── name_token_service.rs # NameTokenService: apply_block, get_name_token, next_block_height
-│
-├── dns_nostr_token/              # DNS-Nostr domain library (depends on name_token)
-│   └── src/
-│       ├── lib.rs
-│       ├── label.rs              # Label (RFC-1034 validation)
-│       ├── dns_nostr_token.rs    # DNS-Nostr-specific token logic (extracts npub from sections)
-│       └── dns_nostr_service.rs  # DnsNostrService: DNS-Nostr tokens from NameTokenService
-│
-├── dns_nostr_server/             # DNS server application (depends on name_token, dns_nostr_token)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs               # Composition root — wires the DNS server on UDP :1053
-│       ├── lib.rs                # Module declarations
-│       ├── sqlite_name_token_repository.rs  # SQLite implementation of name_token::NameTokenRepository
-│       ├── blockchain_watcher.rs # Bitcoin Core RPC sync loop feeding blocks to NameTokenService
-│       ├── nostr_authority.rs    # Hickory Authority impl — handles DNS lookups via Nostr
-│       └── nostr_events_repository.rs  # Fetches DNS record events from a Nostr relay
-│
-├── dns_nostr_wallet/             # Wallet CLI (depends on dns_nostr_token); layered source
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs               # Composition root — env config → SQLite → adapters → use cases → CLI
-│       ├── lib.rs                # Declares the three layers
-│       ├── domain/               # dns_nostr_wallet.rs
-│       ├── application/          # create_wallet.rs, import_wallet.rs, get_receive_address.rs (one use case per file)
-│       └── adapters/             # environment_config.rs, cli.rs
-│
-├── regtest_node/                 # Docker image for Bitcoin Core in regtest mode
-│   ├── Dockerfile
-│   ├── bitcoin.conf              # regtest=1, RPC credentials: rpcuser/rpcpassword
-│   └── entry_point.sh            # Starts bitcoind, creates miner wallet, mines blocks
-│
-├── data/
-│   └── zone-files/               # (currently empty)
-│
-└── .data/                        # (gitignored) local runtime data, e.g. .data/dns-nostr-wallet/seed.txt
-```
-
----
-
-## Setup Commands
-
-### Prerequisites
-
-- Rust toolchain (install via [rustup](https://rustup.rs/))
-- Docker & Docker Compose
-
-### Start development infrastructure
+Prerequisites: Rust toolchain, Docker & Docker Compose.
 
 ```bash
-docker compose up -d
-```
-
-This launches:
-- **Bitcoin Core** regtest node on `localhost:18443` (RPC) / `localhost:18444` (P2P)
-  - Credentials: `rpcuser` / `rpcpassword`
-  - Auto-mines 101 blocks on startup, then 1 block every 10 minutes
-- **Nostr relay** (`nostr-rs-relay`) on `ws://localhost:8080`
-  - Debuggable via [nostrdebug.com](https://nostrdebug.com/) connected to `ws://localhost:8080`
-
-### Build
-
-```bash
+docker compose up -d            # regtest node (RPC :18443) + nostr relay (ws://localhost:8080)
 cargo build --workspace
+cargo run -p dns_nostr_server   # UDP :1053; needs ./data/ to exist
+cargo run -p dns_nostr_wallet -- wallet create | import [WORDS...] | address [--index N]
+cargo test --workspace          # co-located #[cfg(test)] modules, no infrastructure needed
+dig @localhost -p 1053 <label>.nostr.dns.name A   # manual check
 ```
 
-### Run the DNS server
-
-```bash
-cargo run -p dns_nostr_server
-```
-
-The server binds to `0.0.0.0:1053` (UDP) and serves the zone `nostr.dns.name.`.
-
----
-
-## Testing Instructions
-
-### Unit tests
-
-The codebase uses Rust's built-in `#[cfg(test)]` modules. Tests are co-located
-with production code (no separate `tests/` directory).
-
-```bash
-# Run all tests
-cargo test --workspace
-
-# Run tests for a specific crate
-cargo test -p name_token
-```
-
-Key test files:
-- `name_token/src/inscription.rs` — inscription parsing, metadata ordering
-- `name_token/src/name_token.rs` — token lifecycle (mint/update/revoke), valid-token selection
-- `name_token/src/name_token_service.rs` — block application and label resolution against an in-memory repository fake
-- `dns_nostr_wallet/src/domain/*` — `DnsNostrWallet` derivation paths (BIP 84 standard, BIP 44 token/Nostr), `hash31`, address/Nostr-key vectors, and SQLite state persistence
-- `dns_nostr_wallet/src/application/*` — use cases against in-memory SQLite connections
-- `dns_nostr_wallet/src/adapters/*` — env config, CLI parsing and controller with in-memory SQLite connections
-- Other modules follow the same pattern with `#[cfg(test)]` blocks
-
-### Integration testing (manual)
-
-1. Start the infrastructure: `docker compose up -d`
-2. Run the server: `cargo run -p dns_nostr_server`
-3. Query with dig: `dig @localhost -p 1053 <label>.nostr.dns.name A`
+Wallet environment variables: `DNS_NOSTR_NETWORK` (`regtest` default, `testnet`,
+`mainnet`) and `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`).
+Server endpoints are hardcoded (see the server README).
 
 ---
 
 ## Code Style
 
-### Conventions
-
-- **Rust edition 2021** — use modern Rust idioms.
-- **Module-per-file** — each domain concept lives in its own file under `src/`.
-- **Tests co-located** — `#[cfg(test)] mod test_<module_name>` at the bottom of each file.
-- **Trait-based abstraction** — repositories use `async-trait` for trait objects.
-- **Error handling** — domain errors are explicit enums (e.g., `UpdateNameTokenError`), not stringly-typed.
-- **Type aliases** — `pub type Bytes = Vec<u8>` is used throughout for raw byte data.
-- **Derive conventions** — structs derive `Debug, Clone, PartialEq, Eq` and optionally `serde::Serialize, serde::Deserialize`.
-
-### Naming
-
-- Structs: `PascalCase` (e.g., `NameToken`, `InscriptionSection`)
-- Functions: `snake_case` (e.g., `process_same_index_chain`, `select_root_token`)
-- Test modules: `test_<concept>` (e.g., `test_inscription`, `test_name_token`)
-- Files: `snake_case.rs` matching the module name
-
-### Architecture patterns
-
-- The crate exposes both a library (`lib.rs`) and a binary (`main.rs`).
-- `main.rs` is thin — it only wires dependencies together and starts the server.
-- Domain logic is in the library modules; the binary is just the composition root.
-
----
-
-## Environment
-
-### Required environment / config
-
-- Bitcoin Core RPC is hardcoded to `localhost:18443` with credentials `rpcuser`/`rpcpassword` (see `regtest_node/bitcoin.conf`).
-- Nostr relay is hardcoded to `ws://localhost:8080`.
-- DNS zone is hardcoded to `nostr.dns.name.`.
-- The server listens on UDP port `1053`.
-
-### Wallet configuration (environment variables)
-
-- `DNS_NOSTR_NETWORK` — `regtest` (default), `testnet` or `mainnet`; selects the address network and the BIP 44/84 coin type (`0'` mainnet, `1'` otherwise).
-- `DNS_NOSTR_WALLET_DIR` — wallet directory, default `./.data/dns-nostr-wallet` (relative to the working directory). The wallet state is stored in `<dir>/wallet.sqlite` (mode `0600`, never overwritten on create/import).
-- Usage: `cargo run -p dns_nostr_wallet -- wallet create | import [WORDS...] | address [--index N]` (`import` reads the phrase from stdin when no words are given).
-
-### Files to never commit
-
-Per `.gitignore`:
-- `target/` — Rust build artifacts
-- `.env` — environment variables
-- `*.sqlite` — local database files
-- `.data/` — local runtime data, including the wallet `wallet.sqlite`
+- Module-per-file; tests co-located as `#[cfg(test)] mod test_<module_name>` at the bottom of each file.
+- Domain ports are async traits (`async-trait` or `impl Future`); domain and use-case errors are explicit enums, not strings.
+- Domain value types derive `Debug, Clone, PartialEq, Eq` (plus `serde` when serialized); entities holding secret keys implement custom `Debug` to avoid leaking secrets.
+- Libraries expose `lib.rs`; `main.rs` is thin and only wires dependencies.
+- Naming: `PascalCase` types, `snake_case` functions and files, `test_<concept>` test modules.
 
 ---
 
 ## Debugging and Troubleshooting
 
-- **Nostr debugging**: Use [nostrdebug.com](https://nostrdebug.com/) connected to `ws://localhost:8080` to inspect relay events.
-- **Bitcoin RPC**: Use `docker compose exec bitcoin-core bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword <command>` to interact with the node.
-- **DNS queries**: Use `dig @localhost -p 1053 <label>.nostr.dns.name <record_type>` to test resolution.
-- **SQLite state**: The server persists Name-Token state in a local `.sqlite` file (gitignored). Delete it to force a full resync from Bitcoin.
-
----
-
-## Additional Notes
-
-- The DNS-Nostr Wallet is only partially built (seed create/import, receive address, key derivation). Do not add token operations, UTXO scanning or send/receive unless explicitly asked; see the dedicated issues.
-- The Name-Token protocol is general-purpose; `dns-nostr` is just one protocol section type. The code is designed to support multiple protocol sections per inscription.
-- Continuity via Same-Index Chain matters for updates: the Nth input spending a token must correspond to the Nth output reinscribing it (see `process_same_index_chain`).
+- **Nostr**: inspect relay events with [nostrdebug.com](https://nostrdebug.com/) on `ws://localhost:8080`.
+- **Bitcoin RPC**: `docker compose exec bitcoin-core bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword <command>`.
+- **SQLite state**: the server persists to `./data/name-tokens.sqlite` (gitignored); delete it to force a full resync.

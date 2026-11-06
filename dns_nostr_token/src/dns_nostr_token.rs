@@ -45,7 +45,7 @@ impl TryFrom<NameToken> for DnsNostrToken {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_dns_nostr_token {
     use bitcoin::{hashes::Hash, Txid, BlockHash};
     use bdk_chain::BlockId;
 
