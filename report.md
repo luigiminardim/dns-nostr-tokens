@@ -1188,17 +1188,23 @@ and manage decentralized domain labels. Its core purpose is to handle the
 complete lifecycle of Name-Tokens and their DNS-Nostr token inscriptions, beyond
 standard Bitcoin wallet functions.
 
-The wallet's features provide a comprehensive user experience for both standard
-Bitcoin operations and the specialized functions of the Name-Token protocol:
+The wallet's design covers both standard Bitcoin operations and the specialized
+functions of the Name-Token protocol (currently seed creation/import, BIP 84
+address derivation, and Name-Token / Nostr key derivation are implemented in
+[`dns_nostr_wallet`](dns_nostr_wallet/README.md); UTXO scanning, send/receive,
+and token transaction construction are planned):
 
-- **Standard Bitcoin Functions:** The wallet supports basic operations,
-  including sending and receiving bitcoins.
-- **Name-Token Management:** It handles the full lifecycle of DNS-Nostr Tokens:
+- **Seed & Key Derivation (implemented):** Creates or imports a BIP39 mnemonic,
+  persists wallet state in SQLite (`wallet.sqlite`), derives BIP 84 receive
+  addresses, and deterministically derives Name-Token P2PKH addresses and
+  per-label Nostr keys.
+- **Standard Bitcoin Functions (planned):** Sending and receiving bitcoins.
+- **Name-Token Management (planned):** Full lifecycle of DNS-Nostr Tokens:
   - **Create:** Mints new tokens on the Bitcoin blockchain to represent
     subdomain labels.
   - **Transfer:** Transfers ownership of Name-Tokens to other Bitcoin users.
   - **Revoke:** Permanently removes a Name-Token from the active set.
-  - **Nostr Integration:** It publishes user-provided DNS records as signed text
+  - **Nostr Integration:** Publishes user-provided DNS records as signed text
     notes to Nostr relays, using the key linked in the token's inscription.
 
 All token operations involve creating a transaction where the output's locking
@@ -1271,7 +1277,7 @@ wallet for each purpose, illustrating how this segregation is achieved:
 | Standart UTXO   | Bitcoin | First   | External   | Second          | `m/84'/0'/0'/0/1`                   |
 | Standart UTXO   | Bitcoin | First   | Change     | First           | `m/84'/0'/0'/1/0`                   |
 | Name-Token UTXO | Bitcoin | First   | Name-Token | First           | `m/44'/0'/0'/0x6E616D65/0`          |
-| Nostr Key       | Nostr   | First   | Name-Token | hash31("alice") | `m/44'/0'/0'/0x6E616D65/0xBD306425` |
+| Nostr Key       | Nostr   | First   | Name-Token | hash31("alice") | `m/44'/0'/0'/0x6E616D65/0x3D306425` |
 
 #### 3.1.2 Token Creation
 
@@ -1312,95 +1318,38 @@ index, the token is effectively burned and removed from the active set.
 
 ### 3.2. Name-Token Repository
 
-The Name-Token Repository is a crucial backend component that provides a
-queryable interface for the current state of all valid Name-Tokens. To achieve
-this, it acts as a specialized indexer, continuously monitoring the Bitcoin
-blockchain, validating transactions against the protocol rules, and maintaining
-a local results database.
+The Name-Token Repository (`NameTokenRepository` port in [`name_token/src/name_token_repository.rs`](name_token/src/name_token_repository.rs), orchestrated by `NameTokenService` in [`name_token/src/name_token_service.rs`](name_token/src/name_token_service.rs) and persisted via `SqliteNameTokenRepository` in [`dns_nostr_server/src/sqlite_name_token_repository.rs`](dns_nostr_server/src/sqlite_name_token_repository.rs)) is a crucial backend component that provides a queryable interface for the current state of all valid Name-Tokens. To achieve this, a background `BlockchainWatcher` ([`dns_nostr_server/src/blockchain_watcher.rs`](dns_nostr_server/src/blockchain_watcher.rs)) continuously monitors the Bitcoin blockchain, validates transactions against the protocol rules, and maintains a local results database.
 
-The repository persists its internal state in a database, which maps each valid
-label to its current on-chain data, including its UTXO identifier (outpoint) and
-inscription content. This allows the service to resume its work after a restart
-without needing to re-scan the entire blockchain from the beginning.
+The repository persists chain checkpoints and each Name-Token's full event history (`Minted`, `Updated`, `Revoked`) in SQLite. This allows the service to resume its work from the stored tip after a restart without needing to re-scan the entire blockchain from the beginning, and to cleanly roll back block events if a chain reorganization occurs.
 
 #### 3.2.1. Indexing Process and Fork Resistance
 
-The integrity of the repository's database is paramount. Given that the Bitcoin
-blockchain operates on a principle of probabilistic finality, the indexing
-process must be resilient to chain reorganizations (forks). To mitigate the risk
-of processing data from transient, non-canonical chains, a block is only
-considered for indexing after it has achieved a minimum confirmation depth,
-denoted as MIN_NUMBER_CONFIRMATIONS (a typical value is 6). By enforcing this
-confirmation delay, the algorithm ensures it only operates on blocks that are
-part of the stable, canonical history of the ledger.
+The integrity of the repository's database is paramount. Given that the Bitcoin blockchain operates on a principle of probabilistic finality, the indexing process must be resilient to chain reorganizations (forks). Instead of relying solely on a confirmation delay, the system tracks a local chain of block checkpoints (`bdk_chain::local_chain::LocalChain`) alongside an event-sourced representation of every `NameToken` (`Vec<NameTokenEvent>`).
 
-The core of the repository is a state transition indexing algorithm that runs
-periodically (e.g., every 10 minutes) to update its local state based on new,
-confirmed blocks. The indexing algorithm is a background task that runs at a
-fixed interval to process new blocks and update the local database. The process
-is as follows:
+The `BlockchainWatcher` polls Bitcoin Core every 10 seconds (`SYNC_INTERVAL`) using `bdk_bitcoind_rpc::Emitter`, starting from the current stored tip (`NameTokenService::tip()`, or the genesis block on a fresh database). For each emitted block, `NameTokenService::apply_block_connected_to` runs the following steps:
 
-1. **Initialization:** Retrieve next blockchain position.
-   `(blockheight, blockindex, inoutindex)` to be processed.
-2. **Verify Confirmation Depth:** Verify if `blockheight` has achieved the
-   minimum number of confirmations. If this condition is not met, the execution
-   cycle terminates and resumes when the block is sufficiently confirmed.
-3. **Fetch Block Data:** Retrieve the block's content at `blockheight`.
-4. **Process State Transitions:** For each input/output link in each block
-   transaction, apply the Name-Token rules to determine if a token is being
-   minted, updated, or revoked. Then, commit all resulting database changes in a
-   single atomic transaction, which includes:
-   - Insert a new record for any minted token.
-   - Update the record for any updated token.
-   - Delete the record for any revoked token.
-   - Update the scan position pointer to the following input/output link.
-5. **Checkpoint Block Completion:** Save the next `blockheight` as the starting
-   position.
-6. **Loop:** Repeat the entire process, starting from Step 1, to process the
-   next block.
+1. **Detect and Roll Back Reorganizations:** Compare the local chain tip with the emitted block's `connected_to` parent `BlockId`. If they differ, collect all stored checkpoints above `connected_to.height`. For each disconnected `block_id`, fetch affected tokens (`get_name_tokens_by_block`), strip events recorded in that block (`NameToken::undo_block_events`), drop tokens with no remaining events, and atomically commit the rollback (`undo_block_updates`) before disconnecting those heights from `LocalChain`.
+2. **Process Block Transactions:** Iterate through all transactions in the block (`blockindex`). For each transaction, iterate over `0..max(inputs.len(), outputs.len())` same-index positions (`Position { block_id, blockindex, outpoint }`), consulting `PendingBlockUpdates` (for intra-block chains) before querying `get_name_token_by_outpoint` from the repository, and apply `NameToken::process_same_index_chain` to record `Minted`, `Updated`, or `Revoked` events.
+3. **Commit Block Updates Atomically:** Persist all updated Name-Tokens for the block together with the new `(height, block_hash)` checkpoint in a single SQLite transaction (`save_block_updates`), and advance the in-memory `LocalChain`.
 
-The atomicity of the database operations in Step 4 is critical for ensuring data
-consistency. The repository guarantees a consistent state by committing all
-state changes (inserts, updates, deletes) and advancing the scan position
-pointer together in a single, indivisible transaction. This prevents fault
-scenarios, such as a crash after the data is updated but before the position is
-saved, which could lead to incorrect reprocessing or data loss upon restart.
-
-The Block Checkpointing in Step 5 serves as a valuable performance optimization.
-While the atomic updates in Step 4 ensure fine-grained recovery, saving a
-checkpoint after a whole block is processed allows the indexer to resume its
-work from the start of the next block, rather than reiterating through
-already-processed transactions within a partially completed block. This
-significantly speeds up recovery time after a shutdown.
+Committing all token updates and the block checkpoint together in a single SQLite transaction (`save_block_updates` and `undo_block_updates`) guarantees crash consistency: a restart always resumes cleanly from the last committed block checkpoint.
 
 #### 3.2.2. Database Schema
 
-SQLite[^sqlite] was chosen as the underlying database for this implementation.
-The schema is designed to hold both the scanner's state and the indexed set of
-Name-Tokens. The data is organized to allow for efficient lookups and updates.
+SQLite[^sqlite] (`./data/name-tokens.sqlite`) was chosen as the underlying database for the server implementation (`SqliteNameTokenRepository`). The schema holds both the chain checkpoints and the event-sourced Name-Tokens:
 
-- Table State:
-  - `block_height`: The height of the block currently being scanned.
-  - `block_index`: The index of the transaction within the block.
-  - `vout_index`: The index of the output within the transaction.
-- Name-Token Set:
-  - `label`: The unique name of the token, stored as a byte string.
-  - `mint_blockheight`: The block height where the token was first created.
-  - `mint_blockindex`: The block index where the token was first created.
-  - `mint_vout`: The vout index where the token was first created.
-  - `last_txid`: The transaction ID (txid) of the token's current UTXO, stored as a byte.
-  - `last_vout`: The vout index of the token's current UTXO.
-  - `inscription_content`: JSON string containing the raw data from the token's
-    inscription, which can include protocol-specific sections and arguments.
+- Table `chain_checkpoints`:
+  - `height` (`UNSIGNED INTEGER NOT NULL`): The height of the indexed block.
+  - `blockhash` (`CHAR(64) NOT NULL`): The hex-encoded block hash.
+- Table `name_tokens` (`PRIMARY KEY (first_txid, first_vout)`):
+  - `first_txid` (`CHAR(64) NOT NULL`): The transaction ID where the token was originally minted.
+  - `first_vout` (`UNSIGNED INTEGER NOT NULL`): The output index where the token was originally minted.
+  - `label_hex` (`TEXT NOT NULL`): The lowercase hex-encoded label bytes.
+  - `events_json` (`TEXT NOT NULL`): JSON-serialized `Vec<NameTokenEvent>` (`Minted`, `Updated`, `Revoked`), each carrying its `Position` and `Inscription`.
+  - `last_txid` (`CHAR(64) NOT NULL`): The transaction ID of the token's latest event outpoint.
+  - `last_vout` (`UNSIGNED INTEGER NOT NULL`): The output index of the token's latest event outpoint.
 
-To ensure fast queries, the database uses two critical indexes:
-
-- An index on (label, mint_blockheight, mint_blockindex, mint_vout): This allows
-  for quick lookups to find the oldest (and therefore valid) token for a given
-  label, enforcing the "First-is-Root" rule.
-- An index on (last_txid, last_vout): This is essential for the scanning
-  algorithm to rapidly identify which Name-Token is being spent when processing
-  transaction inputs.
+Lookups by label (`get_name_tokens_by_label`) filter by `label_hex` and delegate conflict resolution to `NameToken::select_root_token` (which picks the non-revoked token with the smallest `first_position()`), while input spending lookups (`get_name_token_by_outpoint`) query by `(last_txid, last_vout)`.
 
 ### 3.3. The DNS Server
 

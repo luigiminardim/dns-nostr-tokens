@@ -3,24 +3,29 @@ use hickory_server::{
     ServerFuture,
 };
 use lib::{
-    dns_nostr_token_repository::DnsNostrTokenRepository,
-    name_token_repository::NameTokenRepository, nostr_authority::NostrAuthority,
+    blockchain_watcher::BlockchainWatcher,
+    nostr_authority::NostrAuthority,
     nostr_events_repository::NostrEventsRepository,
+    sqlite_name_token_repository::SqliteNameTokenRepository,
 };
+use dns_nostr_token::dns_nostr_service::DnsNostrService;
+use name_token::NameTokenService;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 #[tokio::main]
 async fn main() {
-    let name_token_repository = Arc::new(NameTokenRepository::create().await);
-    let dns_nostr_token_repository = DnsNostrTokenRepository::new(name_token_repository.clone());
+    let name_token_repository = Box::new(SqliteNameTokenRepository::create().await);
+    let name_token_service = Arc::new(NameTokenService::new(name_token_repository).await);
+    BlockchainWatcher::new(name_token_service.clone()).spawn();
+    let dns_nostr_token_service = DnsNostrService::new(name_token_service);
 
     let nostr_events_repository = NostrEventsRepository::new("ws://localhost:8080".to_string());
 
     let mut handler = Catalog::new();
     let nostr_authority = NostrAuthority::new(
         "nostr.dns.name.".parse().unwrap(),
-        dns_nostr_token_repository,
+        dns_nostr_token_service,
         nostr_events_repository,
     );
     handler.upsert(

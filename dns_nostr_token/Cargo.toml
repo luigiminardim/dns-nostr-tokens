@@ -1,0 +1,13 @@
+[package]
+name = "dns_nostr_token"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+async-trait.workspace = true
+name_token = { path = "../name_token" }
+nostr-sdk = "0.41.0"
+
+[dev-dependencies]
+bitcoin.workspace = true
+bdk_chain = "0.23.3"

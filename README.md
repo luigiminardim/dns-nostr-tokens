@@ -37,19 +37,35 @@ based on these Name-Tokens.
 
 ### DNS-Nostr Wallet
 
-- **Standard Bitcoin Wallet Functions**: Send and receive satoshis.
-- **DNS-Nostr Name-Token** creation and management:
+- **Seed & Key Management (implemented)**: Create or import a BIP39 seed phrase, derive BIP 84 receive addresses (`wallet create | import | address`), and deterministically derive Name-Token P2PKH addresses and per-label Nostr keys.
+- **Standard Bitcoin Wallet Functions (planned)**: Send and receive satoshis.
+- **DNS-Nostr Name-Token** creation and management (planned):
   - Create _DNS-Nostr Name-Tokens_ on the Bitcoin blockchain (representing labels for subdomains).
   - Update the Nostr public key associated with a _DNS-Nostr Name-Token_, effectively changing the owner of the DNS records in the Nostr Network, which requires creating a new inscription.
   - Transfer ownership of _DNS-Nostr Name-Tokens_ to other wallets.
   - Revoke _DNS-Nostr Name-Tokens_.
-- **Nostr Integration**: Publish DNS records as text notes to a Nostr relay using the Nostr public key. This allows the DNS-Nostr server to fetch records from the Nostr network.
+- **Nostr Integration (planned)**: Publish DNS records as text notes to a Nostr relay using the Nostr public key. This allows the DNS-Nostr server to fetch records from the Nostr network.
 
 ### DNS-Nostr Server
 
 - **Name-Token Resolution:** Reads Bitcoin UTXOs by scanning the Bitcoin blockchain to find the mapping between named tokens (representing subdomain labels under the server owner's domain) and their associated Nostr public keys in the token's inscription.
 - **Subdomain Resolution:** Specifically resolves subdomains formed by combining a registered label with the server owner's configured domain (e.g., `label.nostr.dns.app`). It fetches DNS records from a specific Nostr relay using the associated Nostr public key obtained from the Name-Token's inscription on the Bitcoin blockchain.
-- **Support for Standard DNS Records:** Plans to support common DNS record types (A, AAAA, CNAME, NS, MX, TXT) for these subdomains.
+- **Support for Standard DNS Records:** Supports common DNS record types (A, AAAA, CNAME, NS, MX, TXT) for these subdomains via standard DNS zone files.
+
+### Wallet CLI (work in progress)
+
+Only seed management and address derivation are available so far. Domain and architectural details
+are in [`docs/domain.md`](docs/domain.md) and [`dns_nostr_wallet/README.md`](dns_nostr_wallet/README.md).
+
+```bash
+cargo run -p dns_nostr_wallet -- wallet create             # new 12-word BIP39 seed
+cargo run -p dns_nostr_wallet -- wallet import <WORDS...>  # or pipe the phrase via stdin
+cargo run -p dns_nostr_wallet -- wallet address --index 0  # receive address
+```
+
+Configuration is read from `DNS_NOSTR_NETWORK` (`regtest` by default, `testnet`,
+`mainnet`) and `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`; the
+mnemonic is stored in plain text in `wallet.sqlite`, file mode `0600`).
 
 ## Architecture
 
@@ -144,26 +160,26 @@ The fields explanation is as follows:
 ### DNS-Nostr Inscription Protocol
 
 A UTXO inscribed with the _DNS-Nostr_ protocol section within the Name-Token
-inscription is referred to as a DNS-Nostr token. For these tokens, the
+inscription is referred to as a DNS-Nostr token (implemented in [`dns_nostr_token.rs`](dns_nostr_token/src/dns_nostr_token.rs) and [`inscription.rs`](name_token/src/inscription.rs)). For these tokens, the
 `$section_protocol` field will be set to `"dns-nostr"`, and the first argument
-(`$argument_0`) will be the raw hexadecimal representation of the Nostr public
+(`$argument_0`) will be the raw 32-byte representation of the Nostr public
 key associated with the token.
 
 ```bash
 OP_FALSE
 OP_IF
-  OP_PUSH "name"            # Fixed ASCII string identifying this output as a DNS-Nostr Name-Token
-  OP_PUSH $label            # Should follow RFC-1034 DNS rules for labels and use downcase letters
+  OP_PUSH "name"              # Fixed ASCII string identifying this output as a DNS-Nostr Name-Token
+  OP_PUSH $label              # Should follow RFC-1034 DNS rules for labels and use downcase letters
   OP_NOP
   OP_PUSH "dns-nostr"
-  OP_PUSH $nostr_pubkey_hex # Raw hexadecimal representation of the Nostr public key
+  OP_PUSH $nostr_pubkey_bytes # Raw 32-byte representation of the Nostr public key
 OP_ENDIF
 ```
 
-To ensure compatibility with standard DNS practices defined in RFC-1034, the
+To ensure compatibility with standard DNS practices defined in RFC-1034 (validated in [`dns_nostr_token/src/label.rs`](dns_nostr_token/src/label.rs)), the
 `$label` for `.dns-nostr` domains must adhere to DNS label rules: it should consist
-of lowercase letters (a-z), digits (0-9), and hyphens (-), start with a letter,
-and be no more than 63 characters in length. The requirement for lowercase is
+of lowercase letters (a-z), digits (0-9), and hyphens (-), start with a lowercase letter,
+not end with a hyphen (-), and be no more than 63 characters in length. The requirement for lowercase is
 also due to the case-insensitive nature of DNS, promoting consistency within the
 Name-Token system.
 
