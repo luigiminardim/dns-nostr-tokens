@@ -1,13 +1,15 @@
 use clap::Parser;
 use dns_nostr_wallet::adapters::cli::{Cli, CliController};
 use dns_nostr_wallet::adapters::environment_config::EnvironmentConfig;
+use dns_nostr_wallet::adapters::sqlite_name_token_wallet_repository::SqliteNameTokenWalletRepository;
 use dns_nostr_wallet::application::create_wallet::CreateWallet;
 use dns_nostr_wallet::application::get_receive_address::GetReceiveAddress;
 use dns_nostr_wallet::application::import_wallet::ImportWallet;
+use dns_nostr_wallet::domain::name_token_wallet_repository::NameTokenWalletRepository;
 use rusqlite::Connection;
 use std::fs;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -24,8 +26,8 @@ fn main() -> ExitCode {
     }
 
     let db_path = config.db_path();
-    let connection = match Connection::open(&db_path) {
-        Ok(conn) => Arc::new(Mutex::new(conn)),
+    let conn = match Connection::open(&db_path) {
+        Ok(conn) => conn,
         Err(error) => {
             return fail(format!(
                 "could not open wallet database `{}`: {error}",
@@ -44,11 +46,12 @@ fn main() -> ExitCode {
         }
     }
 
+    let repository: Arc<dyn NameTokenWalletRepository> =
+        Arc::new(SqliteNameTokenWalletRepository::new(conn));
     let controller = CliController::new(
-        CreateWallet::new(config.network),
-        ImportWallet::new(config.network),
-        GetReceiveAddress::new(),
-        connection,
+        CreateWallet::new(config.network, Arc::clone(&repository)),
+        ImportWallet::new(config.network, Arc::clone(&repository)),
+        GetReceiveAddress::new(repository),
     );
 
     match controller.execute(cli.command, &mut std::io::stdin()) {

@@ -1277,7 +1277,7 @@ wallet for each purpose, illustrating how this segregation is achieved:
 | Standart UTXO   | Bitcoin | First   | External   | Second          | `m/84'/0'/0'/0/1`                   |
 | Standart UTXO   | Bitcoin | First   | Change     | First           | `m/84'/0'/0'/1/0`                   |
 | Name-Token UTXO | Bitcoin | First   | Name-Token | First           | `m/44'/0'/0'/0x6E616D65/0`          |
-| Nostr Key       | Nostr   | First   | Name-Token | hash31("alice") | `m/44'/0'/0'/0x6E616D65/0x3D306425` |
+| Nostr Key       | Nostr   | First   | Name-Token | hash31("alice") | `m/44'/1237'/0'/0x6E616D65/0x3D306425` |
 
 #### 3.1.2 Token Creation
 

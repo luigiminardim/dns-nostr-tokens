@@ -5,10 +5,10 @@ Crate root of `dns_nostr_wallet`. `lib.rs` exposes the three layers (dependencie
 
 ## Interface
 - [`lib.rs`](./lib.rs): `pub mod adapters`, `pub mod application`, `pub mod domain`.
-- [`main.rs`](./main.rs): `main() -> ExitCode` (parses `Cli`, loads `EnvironmentConfig`, opens SQLite, builds `CliController`, prints the result), private `fail`.
-- [adapters](./adapters/README.md) — config and CLI.
+- [`main.rs`](./main.rs): `main() -> ExitCode` (parses `Cli`, loads `EnvironmentConfig`, opens SQLite, constructs `SqliteNameTokenWalletRepository`, wires `CreateWallet`, `ImportWallet`, `GetReceiveAddress` and `CliController`, prints the result), private `fail`.
+- [adapters](./adapters/README.md) — config, SQLite repository adapter and CLI.
 - [application](./application/README.md) — use cases.
-- [domain](./domain/README.md) — `DnsNostrWallet` entity.
+- [domain](./domain/README.md) — `DnsNostrWallet` entity, `KeyDerivationPolicy` and `NameTokenWalletRepository` port.
 
 ## Invariants
 - `main` exits with `ExitCode::FAILURE` and `error: …` on stderr for any config, directory, database or command error; success output goes to stdout.

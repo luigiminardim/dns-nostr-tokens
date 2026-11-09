@@ -117,7 +117,7 @@ Prerequisites: Rust toolchain, Docker & Docker Compose.
 docker compose up -d            # regtest node (RPC :18443) + nostr relay (ws://localhost:8080)
 cargo build --workspace
 cargo run -p dns_nostr_server   # UDP :1053; needs ./data/ to exist
-cargo run -p dns_nostr_wallet -- wallet create | import [WORDS...] | address [--index N]
+cargo run -p dns_nostr_wallet -- wallet create | import [WORDS...] | address
 cargo test --workspace          # co-located #[cfg(test)] modules, no infrastructure needed
 dig @localhost -p 1053 <label>.nostr.dns.name A   # manual check
 ```
@@ -135,6 +135,9 @@ Server endpoints are hardcoded (see the server README).
 - Domain value types derive `Debug, Clone, PartialEq, Eq` (plus `serde` when serialized); entities holding secret keys implement custom `Debug` to avoid leaking secrets.
 - Libraries expose `lib.rs`; `main.rs` is thin and only wires dependencies.
 - Naming: `PascalCase` types, `snake_case` functions and files, `test_<concept>` test modules.
+- Avoid creating one-line helper functions without expressive domain meaning that are not reused across multiple places.
+- Avoid declaring constants in global/module scope if they are not reused; scope single-use constants locally inside the function or method that uses them.
+- Keep helper functions that belong to a policy, entity, service, or adapter as private methods inside its `impl` block rather than as free module-level functions.
 
 ---
 

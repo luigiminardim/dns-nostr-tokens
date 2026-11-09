@@ -60,7 +60,7 @@ are in [`docs/domain.md`](docs/domain.md) and [`dns_nostr_wallet/README.md`](dns
 ```bash
 cargo run -p dns_nostr_wallet -- wallet create             # new 12-word BIP39 seed
 cargo run -p dns_nostr_wallet -- wallet import <WORDS...>  # or pipe the phrase via stdin
-cargo run -p dns_nostr_wallet -- wallet address --index 0  # receive address
+cargo run -p dns_nostr_wallet -- wallet address            # receive address
 ```
 
 Configuration is read from `DNS_NOSTR_NETWORK` (`regtest` by default, `testnet`,

@@ -1,13 +1,14 @@
-use crate::domain::dns_nostr_wallet::{AddressInfo, DnsNostrWallet, WalletError};
-use bdk_wallet::rusqlite::Connection;
+use crate::domain::name_token_wallet_repository::{
+    NameTokenWalletRepository, WalletRepositoryError,
+};
+use bdk_wallet::AddressInfo;
 use std::fmt;
+use std::sync::Arc;
 
-/// Use case: derive the standard external (receive) address.
-///
-/// When `index` is `None`, reveals the next address from the wallet's external keychain and persists it.
-/// When `index` is `Some(i)`, peeks at index `i` without advancing the keychain.
-#[derive(Default)]
-pub struct GetReceiveAddress;
+/// Use case: reveal the next external (receive) BIP 84 Bitcoin address and persist the updated index.
+pub struct GetReceiveAddress {
+    repository: Arc<dyn NameTokenWalletRepository>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GetReceiveAddressError {
@@ -16,27 +17,23 @@ pub enum GetReceiveAddressError {
 }
 
 impl GetReceiveAddress {
-    pub fn new() -> Self {
-        Self
+    pub fn new(repository: Arc<dyn NameTokenWalletRepository>) -> Self {
+        Self { repository }
     }
 
-    pub fn execute(
-        &self,
-        conn: &mut Connection,
-        index: Option<u32>,
-    ) -> Result<AddressInfo, GetReceiveAddressError> {
-        let mut wallet =
-            DnsNostrWallet::load(conn)?.ok_or(GetReceiveAddressError::WalletNotFound)?;
-        let info = match index {
-            Some(i) => wallet.peek_address(i)?,
-            None => wallet.reveal_next_address(conn)?,
-        };
+    pub fn execute(&self) -> Result<AddressInfo, GetReceiveAddressError> {
+        let mut wallet = self
+            .repository
+            .load()?
+            .ok_or(GetReceiveAddressError::WalletNotFound)?;
+        let info = wallet.reveal_next_bitcoin_address();
+        self.repository.save(&mut wallet)?;
         Ok(info)
     }
 }
 
-impl From<WalletError> for GetReceiveAddressError {
-    fn from(error: WalletError) -> Self {
+impl From<WalletRepositoryError> for GetReceiveAddressError {
+    fn from(error: WalletRepositoryError) -> Self {
         Self::Wallet(error.to_string())
     }
 }
@@ -58,7 +55,9 @@ impl std::error::Error for GetReceiveAddressError {}
 #[cfg(test)]
 mod test_get_receive_address {
     use super::*;
-    use crate::domain::dns_nostr_wallet::StandardChain;
+    use crate::adapters::sqlite_name_token_wallet_repository::SqliteNameTokenWalletRepository;
+    use crate::domain::dns_nostr_wallet::DnsNostrWallet;
+    use bdk_wallet::KeychainKind;
     use bip39::Mnemonic;
     use bitcoin::Network;
 
@@ -66,50 +65,48 @@ mod test_get_receive_address {
     const MAINNET_EXTERNAL_1: &str = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g";
     const REGTEST_EXTERNAL_0: &str = "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk";
 
-    fn init_wallet(conn: &mut Connection, network: Network) {
+    fn init_wallet(network: Network) -> Arc<dyn NameTokenWalletRepository> {
+        let repository = SqliteNameTokenWalletRepository::in_memory().unwrap();
         let mnemonic = Mnemonic::parse(
             "abandon abandon abandon abandon abandon abandon \
              abandon abandon abandon abandon abandon about",
         )
         .unwrap();
-        DnsNostrWallet::create(&mnemonic, network, conn).unwrap();
+        let mut wallet = DnsNostrWallet::new(&mnemonic, network).unwrap();
+        repository.create(&mnemonic, &mut wallet).unwrap();
+        Arc::new(repository)
     }
 
     #[test]
-    fn matches_known_vector_default() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        init_wallet(&mut conn, Network::Bitcoin);
-        let mainnet = GetReceiveAddress::new().execute(&mut conn, None).unwrap();
-        assert_eq!(mainnet.index, 0);
-        assert_eq!(mainnet.chain, StandardChain::External);
-        assert_eq!(mainnet.address.to_string(), MAINNET_EXTERNAL_0);
+    fn reveals_and_persists_sequential_addresses() {
+        let repository = init_wallet(Network::Bitcoin);
+        let use_case = GetReceiveAddress::new(repository);
 
-        let mut regtest_conn = Connection::open_in_memory().unwrap();
-        init_wallet(&mut regtest_conn, Network::Regtest);
-        let regtest = GetReceiveAddress::new()
-            .execute(&mut regtest_conn, None)
-            .unwrap();
+        let first = use_case.execute().unwrap();
+        assert_eq!(first.index, 0);
+        assert_eq!(first.keychain, KeychainKind::External);
+        assert_eq!(first.address.to_string(), MAINNET_EXTERNAL_0);
+
+        let second = use_case.execute().unwrap();
+        assert_eq!(second.index, 1);
+        assert_eq!(second.keychain, KeychainKind::External);
+        assert_eq!(second.address.to_string(), MAINNET_EXTERNAL_1);
+    }
+
+    #[test]
+    fn matches_known_regtest_vector() {
+        let repository = init_wallet(Network::Regtest);
+        let regtest = GetReceiveAddress::new(repository).execute().unwrap();
         assert_eq!(regtest.index, 0);
-        assert_eq!(regtest.chain, StandardChain::External);
+        assert_eq!(regtest.keychain, KeychainKind::External);
         assert_eq!(regtest.address.to_string(), REGTEST_EXTERNAL_0);
     }
 
     #[test]
-    fn peeks_at_specified_index() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        init_wallet(&mut conn, Network::Bitcoin);
-        let address = GetReceiveAddress::new()
-            .execute(&mut conn, Some(1))
-            .unwrap();
-        assert_eq!(address.index, 1);
-        assert_eq!(address.chain, StandardChain::External);
-        assert_eq!(address.address.to_string(), MAINNET_EXTERNAL_1);
-    }
-
-    #[test]
     fn fails_without_wallet() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        let result = GetReceiveAddress::new().execute(&mut conn, None);
+        let repository: Arc<dyn NameTokenWalletRepository> =
+            Arc::new(SqliteNameTokenWalletRepository::in_memory().unwrap());
+        let result = GetReceiveAddress::new(repository).execute();
         assert_eq!(result, Err(GetReceiveAddressError::WalletNotFound));
     }
 }

@@ -272,7 +272,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "461b92c4e47b688a92740b204f4580e0a51775df16b67dde1d2db6ede1f0ba09"
 dependencies = [
  "bdk_chain 0.21.1",
- "bip39",
  "bitcoin",
  "miniscript",
  "rand_core 0.6.4",
