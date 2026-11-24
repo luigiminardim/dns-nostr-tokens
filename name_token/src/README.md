@@ -8,13 +8,13 @@ infrastructure dependencies: storage is abstracted by `NameTokenRepository`.
 `src/bin/` exists but is empty.
 
 ## Interface
-- [`lib.rs`](./lib.rs): declares modules and re-exports `Bytes`, `Inscription`, `InscriptionSection`, `NameToken`, `NameTokenEvent`, `UpdateNameTokenError`, `NameTokenRepository`, `NameTokenService`, `Label`, `Position`, `InMemoryNameTokenRepository`.
+- [`lib.rs`](./lib.rs): declares modules and re-exports `Bytes`, `Inscription`, `InscriptionSection`, `NameToken`, `NameTokenEvent`, `UpdateNameTokenError`, `NameTokenRepository`, `NameTokenService`, `NameTokenServiceError`, `Label`, `Position`, `InMemoryNameTokenRepository`.
 - [`label.rs`](./label.rs): `Label(Vec<u8>)` newtype (`new`, `AsRef<[u8]>`, `From<Vec<u8>>`, `From<&[u8]>`, `PartialEq<[u8]>`, `PartialEq<&[u8]>`); derives `Ord`, `Serialize`, `Deserialize`.
 - [`position.rs`](./position.rs): `Position::new(BlockId, blockindex, OutPoint)` with getters `block_id`, `block_height`, `block_hash`, `blockindex`, `outpoint`, `txid`, `vout`. Derives `Ord`.
 - [`inscription.rs`](./inscription.rs): `type Bytes = Vec<u8>`, `InscriptionSection { protocol, arguments }`, `Inscription { label, sections }`, `Inscription::from_txout(&TxOut) -> Option<Inscription>`.
 - [`name_token.rs`](./name_token.rs): `NameTokenEvent::{Minted, Updated, Revoked}` (+ `position()`), `NameToken` (`new`, `label`, `events`, `first_position`, `last_position`, `last_outpoint`, `inscription`, `is_revoked`, `has_minted`, `protocol_args`, `update`, `revoke`, `process_same_index_chain`, `select_root_token`, `undo_block_events`), `UpdateNameTokenError::{LabelMismatch, Revoked, StaleInscription}`.
 - [`name_token_repository.rs`](./name_token_repository.rs): `NameTokenRepository` async trait (port): `get_name_token_by_outpoint`, `get_name_tokens_by_label`, `save_block_updates`, `get_name_tokens_by_block`, `undo_block_updates`, `get_chain`.
-- [`name_token_service.rs`](./name_token_service.rs): `NameTokenService::new(Box<dyn NameTokenRepository>)`, `apply_block_connected_to(&Block, height, connected_to: BlockId)`, `get_name_token(&[u8])`, `tip() -> Option<CheckPoint>`.
+- [`name_token_service.rs`](./name_token_service.rs): `NameTokenServiceError::MissingGenesis`, `NameTokenService::new(Box<dyn NameTokenRepository>) -> Result<Self, NameTokenServiceError>`, `apply_block_connected_to(&Block, height, connected_to: BlockId)`, `get_name_token(&[u8])`, `tip() -> Option<CheckPoint>`, `genesis_hash() -> Option<BlockHash>`.
 - [`in_memory_name_token_repository.rs`](./in_memory_name_token_repository.rs): `InMemoryNameTokenRepository` (`Default`), a `Mutex`-guarded in-memory implementation of `NameTokenRepository`.
 
 ## Invariants
@@ -26,7 +26,8 @@ infrastructure dependencies: storage is abstracted by `NameTokenRepository`.
 - `first_position` / `last_position` panic if a token has no events.
 - `NameTokenService::apply_transaction` iterates `max(inputs, outputs)` indices; each position's outpoint is `(txid, index)`. Within a block, pending updates are consulted by `last_outpoint` before the repository.
 - Reorg: if the stored tip differs from `connected_to`, all blocks above `connected_to.height` are undone (events removed via `undo_block_events`; tokens with no remaining events are dropped) before the new block is applied.
-- A `LocalChain` is created only when the first applied block has `height == 0` (or rebuilt from `get_chain` in `new`).
+- Startup validation: if persisted checkpoints returned by `get_chain` are non-empty but lack height `0`, `NameTokenService::new` returns `Err(NameTokenServiceError::MissingGenesis)` instead of falling back to an empty chain.
+- A `LocalChain` is created when rebuilt from `get_chain` in `new`, when the first applied block has `height == 0`, or when the first applied block has `height > 0` and `connected_to.height == 0` (in which case `(connected_to.hash, 0)` is persisted before `(block_hash, height)` and both checkpoints seed `LocalChain`). If `height > 0 && connected_to.height > 0`, `chain` remains `None`.
 - `NameTokenRepository` implementors must be `Send + Sync`; `save_block_updates` and `undo_block_updates` are documented as atomic.
 
 ## Side Effects

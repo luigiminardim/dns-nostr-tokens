@@ -5,11 +5,33 @@ use crate::{
     position::Position,
 };
 use bdk_chain::{local_chain::LocalChain, BlockId, CheckPoint};
-use bitcoin::{Block, OutPoint, Transaction, TxIn, TxOut};
-use std::{collections::HashMap, sync::Mutex};
+use bitcoin::{Block, BlockHash, OutPoint, Transaction, TxIn, TxOut};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    sync::Mutex,
+};
 
 /// Name-Tokens changed earlier in the block being applied, keyed by their first outpoint.
 type PendingBlockUpdates = HashMap<OutPoint, NameToken>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameTokenServiceError {
+    MissingGenesis,
+}
+
+impl fmt::Display for NameTokenServiceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingGenesis => write!(
+                formatter,
+                "persisted chain checkpoints are missing height 0 (genesis)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NameTokenServiceError {}
 
 pub struct NameTokenService {
     repository: Box<dyn NameTokenRepository>,
@@ -17,22 +39,25 @@ pub struct NameTokenService {
 }
 
 impl NameTokenService {
-    pub async fn new(repository: Box<dyn NameTokenRepository>) -> Self {
+    pub async fn new(
+        repository: Box<dyn NameTokenRepository>,
+    ) -> Result<Self, NameTokenServiceError> {
         let chain_points = repository.get_chain().await;
-        let mut chain = None;
-        if !chain_points.is_empty() {
-            let mut tree = std::collections::BTreeMap::new();
-            for point in chain_points {
-                tree.insert(point.height, point.hash);
-            }
-            if let Ok(c) = LocalChain::from_blocks(tree) {
-                chain = Some(c);
-            }
-        }
-        Self {
+        let chain = if chain_points.is_empty() {
+            None
+        } else {
+            let tree: BTreeMap<u32, BlockHash> = chain_points
+                .into_iter()
+                .map(|point| (point.height, point.hash))
+                .collect();
+            let loaded_chain = LocalChain::from_blocks(tree)
+                .map_err(|_| NameTokenServiceError::MissingGenesis)?;
+            Some(loaded_chain)
+        };
+        Ok(Self {
             repository,
             chain: Mutex::new(chain),
-        }
+        })
     }
 
     /// Applies the Name-Token changes of `block`, handling chain reorganizations if necessary.
@@ -89,6 +114,16 @@ impl NameTokenService {
         }
         let updates: Vec<NameToken> = pending_block_updates.into_values().collect();
 
+        let needs_genesis_checkpoint = {
+            let chain_opt = self.chain.lock().unwrap();
+            chain_opt.is_none() && height > 0 && connected_to.height == 0
+        };
+        if needs_genesis_checkpoint {
+            self.repository
+                .save_block_updates(connected_to.hash, 0, &[])
+                .await;
+        }
+
         self.repository
             .save_block_updates(block_hash, height, &updates)
             .await;
@@ -98,6 +133,13 @@ impl NameTokenService {
             if chain_opt.is_none() && height == 0 {
                 let (new_chain, _) = LocalChain::from_genesis_hash(block_hash);
                 *chain_opt = Some(new_chain);
+            } else if chain_opt.is_none() && height > 0 && connected_to.height == 0 {
+                let mut blocks = BTreeMap::new();
+                blocks.insert(0, connected_to.hash);
+                blocks.insert(height, block_hash);
+                if let Ok(new_chain) = LocalChain::from_blocks(blocks) {
+                    *chain_opt = Some(new_chain);
+                }
             } else if let Some(chain) = chain_opt.as_mut() {
                 let _ = chain.insert_block(block_id);
             }
@@ -114,6 +156,13 @@ impl NameTokenService {
     pub fn tip(&self) -> Option<CheckPoint> {
         let chain_opt = self.chain.lock().unwrap();
         chain_opt.as_ref().map(|chain| chain.tip())
+    }
+
+    pub fn genesis_hash(&self) -> Option<BlockHash> {
+        let chain_opt = self.chain.lock().unwrap();
+        chain_opt
+            .as_ref()
+            .and_then(|chain| chain.get(0).map(|checkpoint| checkpoint.hash()))
     }
 
     async fn apply_transaction(
@@ -198,7 +247,47 @@ mod test_name_token_service {
 
 
     async fn new_service() -> NameTokenService {
-        NameTokenService::new(Box::new(crate::InMemoryNameTokenRepository::default())).await
+        NameTokenService::new(Box::new(crate::InMemoryNameTokenRepository::default()))
+            .await
+            .unwrap()
+    }
+
+    struct SharedRepository(std::sync::Arc<crate::InMemoryNameTokenRepository>);
+
+    #[async_trait::async_trait]
+    impl NameTokenRepository for SharedRepository {
+        async fn get_name_token_by_outpoint(&self, outpoint: OutPoint) -> Option<NameToken> {
+            self.0.get_name_token_by_outpoint(outpoint).await
+        }
+
+        async fn get_name_tokens_by_label(&self, label: &Label) -> Vec<NameToken> {
+            self.0.get_name_tokens_by_label(label).await
+        }
+
+        async fn save_block_updates(
+            &self,
+            block_hash: BlockHash,
+            height: u32,
+            updated_name_tokens: &[NameToken],
+        ) {
+            self.0
+                .save_block_updates(block_hash, height, updated_name_tokens)
+                .await
+        }
+
+        async fn get_name_tokens_by_block(&self, block_id: BlockId) -> Vec<NameToken> {
+            self.0.get_name_tokens_by_block(block_id).await
+        }
+
+        async fn undo_block_updates(&self, block_id: BlockId, updated_name_tokens: &[NameToken]) {
+            self.0
+                .undo_block_updates(block_id, updated_name_tokens)
+                .await
+        }
+
+        async fn get_chain(&self) -> Vec<BlockId> {
+            self.0.get_chain().await
+        }
     }
 
     fn inscription_script(label: &[u8]) -> ScriptBuf {
@@ -534,5 +623,155 @@ mod test_name_token_service {
 
         let name_token = service.get_name_token(&label()).await;
         assert_eq!(name_token, None);
+    }
+
+    #[tokio::test]
+    async fn should_initialize_chain_and_persist_genesis_when_first_block_connects_to_height_zero() {
+        let shared = std::sync::Arc::new(crate::InMemoryNameTokenRepository::default());
+        let service = NameTokenService::new(Box::new(SharedRepository(shared.clone())))
+            .await
+            .unwrap();
+        let genesis_hash = BlockHash::from_byte_array([7; 32]);
+        let b1 = block(vec![], 1);
+
+        service
+            .apply_block_connected_to(
+                &b1,
+                1,
+                BlockId {
+                    height: 0,
+                    hash: genesis_hash,
+                },
+            )
+            .await;
+
+        assert_eq!(
+            service.tip().unwrap().block_id(),
+            BlockId {
+                height: 1,
+                hash: b1.block_hash(),
+            }
+        );
+        assert_eq!(service.genesis_hash(), Some(genesis_hash));
+        assert_eq!(
+            shared.get_chain().await,
+            vec![
+                BlockId {
+                    height: 0,
+                    hash: genesis_hash,
+                },
+                BlockId {
+                    height: 1,
+                    hash: b1.block_hash(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn should_reload_tip_and_genesis_hash_from_persisted_checkpoints() {
+        let shared = std::sync::Arc::new(crate::InMemoryNameTokenRepository::default());
+        let first_service = NameTokenService::new(Box::new(SharedRepository(shared.clone())))
+            .await
+            .unwrap();
+        let genesis_hash = BlockHash::from_byte_array([9; 32]);
+        let b1 = block(vec![], 1);
+
+        first_service
+            .apply_block_connected_to(
+                &b1,
+                1,
+                BlockId {
+                    height: 0,
+                    hash: genesis_hash,
+                },
+            )
+            .await;
+
+        let reloaded_service = NameTokenService::new(Box::new(SharedRepository(shared)))
+            .await
+            .unwrap();
+        assert_eq!(
+            reloaded_service.tip().unwrap().block_id(),
+            BlockId {
+                height: 1,
+                hash: b1.block_hash(),
+            }
+        );
+        assert_eq!(reloaded_service.genesis_hash(), Some(genesis_hash));
+    }
+
+    #[tokio::test]
+    async fn should_reject_persisted_chain_missing_genesis_checkpoint() {
+        let repository = crate::InMemoryNameTokenRepository::default();
+        repository
+            .save_block_updates(BlockHash::from_byte_array([3; 32]), 1, &[])
+            .await;
+
+        let result = NameTokenService::new(Box::new(repository)).await;
+        assert!(matches!(result, Err(NameTokenServiceError::MissingGenesis)));
+    }
+
+    #[tokio::test]
+    async fn should_preserve_mint_update_revoke_lifecycle_from_empty_service() {
+        let service = new_service().await;
+        let genesis_hash = BlockHash::from_byte_array([5; 32]);
+
+        let mint_tx = transaction(vec![funding_outpoint(1)], vec![inscribed_output(b"label")]);
+        let b1 = block(vec![mint_tx.clone()], 1);
+        service
+            .apply_block_connected_to(
+                &b1,
+                1,
+                BlockId {
+                    height: 0,
+                    hash: genesis_hash,
+                },
+            )
+            .await;
+
+        let minted = service.get_name_token(&label()).await.unwrap();
+        assert_eq!(
+            minted.last_position(),
+            &position(1, b1.block_hash(), 0, 0, &mint_tx)
+        );
+
+        let update_tx = transaction(
+            vec![OutPoint {
+                txid: mint_tx.compute_txid(),
+                vout: 0,
+            }],
+            vec![inscribed_output(b"label")],
+        );
+        let b2 = block(vec![update_tx.clone()], 2);
+        service
+            .apply_block_connected_to(&b2, 2, service.tip().unwrap().block_id())
+            .await;
+
+        let updated = service.get_name_token(&label()).await.unwrap();
+        assert_eq!(
+            updated.first_position(),
+            &position(1, b1.block_hash(), 0, 0, &mint_tx)
+        );
+        assert_eq!(
+            updated.last_position(),
+            &position(2, b2.block_hash(), 0, 0, &update_tx)
+        );
+
+        let revoke_tx = transaction(
+            vec![OutPoint {
+                txid: update_tx.compute_txid(),
+                vout: 0,
+            }],
+            vec![plain_output()],
+        );
+        let b3 = block(vec![revoke_tx], 3);
+        service
+            .apply_block_connected_to(&b3, 3, service.tip().unwrap().block_id())
+            .await;
+
+        assert_eq!(service.get_name_token(&label()).await, None);
+        assert_eq!(service.tip().unwrap().height(), 3);
+        assert_eq!(service.genesis_hash(), Some(genesis_hash));
     }
 }

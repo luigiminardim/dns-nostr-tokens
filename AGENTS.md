@@ -1,11 +1,11 @@
 # AGENTS.md
 
 > This project is a work-in-progress. The codebase currently contains the
-> `name_token` and `dns_nostr_token` (domain libraries), `dns_nostr_server` and
-> `dns_nostr_wallet` crates. The wallet currently only creates/imports a BIP39
-> seed and derives addresses and keys; token operations and send/receive are not
-> built yet. All guidance
-> below applies to **what is built today**.
+> `name_token` and `dns_nostr_token` (domain libraries), `dns_nostr_server`,
+> `dns_nostr_wallet`, and `end_to_end` crates. The wallet currently only
+> creates/imports a BIP39 seed and derives addresses and keys; token operations
+> and send/receive are not built yet. All guidance below applies to **what is
+> built today**.
 
 > **Agent orchestration rules** (workflow, core principles, behavioral guardrails)
 > are defined in [`.agents/rules/agent-orchestration.md`](.agents/rules/agent-orchestration.md)
@@ -44,6 +44,7 @@ DNS Client ──DNS──▶ dns_nostr_server ──RPC──▶ Bitcoin Node (
 
 dns_nostr_server ──▶ dns_nostr_token ──▶ name_token
 dns_nostr_wallet ──▶ dns_nostr_token
+end_to_end       ──▶ dns_nostr_server, dns_nostr_token, name_token
 ```
 
 Dependencies point inward; `main.rs` in each binary crate is the composition
@@ -57,12 +58,14 @@ unless explicitly asked.
 | --------- | -------- | ---- |
 | `name_token/` | [README](name_token/README.md), [src](name_token/src/README.md) | Name-Token domain, repository port, service |
 | `dns_nostr_token/` | [README](dns_nostr_token/README.md), [src](dns_nostr_token/src/README.md) | `Label`, `DnsNostrToken`, `DnsNostrService` |
-| `dns_nostr_server/` | [README](dns_nostr_server/README.md), [src](dns_nostr_server/src/README.md) | DNS authority, SQLite repository, Bitcoin watcher, Nostr lookups |
+| `dns_nostr_server/` | [README](dns_nostr_server/README.md), [src](dns_nostr_server/src/README.md) | DNS authority, SQLite repository, Bitcoin watcher, Nostr lookups, env config |
 | `dns_nostr_wallet/` | [README](dns_nostr_wallet/README.md), [src](dns_nostr_wallet/src/README.md), [adapters](dns_nostr_wallet/src/adapters/README.md), [application](dns_nostr_wallet/src/application/README.md), [domain](dns_nostr_wallet/src/domain/README.md) | Wallet CLI |
-| `regtest_node/` | [README](regtest_node/README.md) | Bitcoin Core regtest Docker image |
+| `end_to_end/` | [README](end_to_end/README.md), [src](end_to_end/src/README.md) | Self-contained black-box E2E binary crate (`src/main.rs`) and shared harness |
 
-Other: `docs/` (domain model), `report.md` (technical report), `data/zone-files/`
-(example zone), `.data/` (gitignored local runtime data).
+Other: `docs/` (domain model & designs), `report.md` (technical report),
+`data/zone-files/` (example zone), `.data/` (gitignored local runtime data),
+`docker-compose.yml` (on-demand `bitcoin/bitcoin:28.1-alpine` regtest +
+`nostr-rs-relay`), `justfile` (dev/test orchestration).
 
 ---
 
@@ -111,20 +114,35 @@ functions, clean error handling, and co-located tests.
 
 ## Commands
 
-Prerequisites: Rust toolchain, Docker & Docker Compose.
+Prerequisites: Rust toolchain, Docker & Docker Compose, and `just`.
 
 ```bash
-docker compose up -d            # regtest node (RPC :18443) + nostr relay (ws://localhost:8080)
+just test                                       # offline workspace unit tests (no Docker needed)
+just test up                                    # start bitcoin-core (regtest) + nostr-relay and wait until healthy
+just test down                                  # stop containers (preserves Docker volumes)
+just serve                                      # run dns_nostr_server (UDP :1053 by default)
+just test e2e                                   # run self-contained full-stack E2E suite (starts Docker + spawns dns_nostr_server)
+just wallet create | import [WORDS...] | address # run dns_nostr_wallet CLI
+just fund <BTC> <Address>                       # fund regtest address from miner wallet + mine 1 block
 cargo build --workspace
-cargo run -p dns_nostr_server   # UDP :1053; needs ./data/ to exist
-cargo run -p dns_nostr_wallet -- wallet create | import [WORDS...] | address
-cargo test --workspace          # co-located #[cfg(test)] modules, no infrastructure needed
-dig @localhost -p 1053 <label>.nostr.dns.name A   # manual check
+dig @localhost -p 1053 <label>.nostr.dns.name TXT # manual check
 ```
 
-Wallet environment variables: `DNS_NOSTR_NETWORK` (`regtest` default, `testnet`,
-`mainnet`) and `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`).
-Server endpoints are hardcoded (see the server README).
+### Environment Variables
+
+**`dns_nostr_server` (also consumed by `end_to_end`):**
+- `DNS_NOSTR_BIND_ADDR` (default `0.0.0.0:1053`)
+- `DNS_NOSTR_ZONE_ORIGIN` (default `nostr.dns.name.`)
+- `DNS_NOSTR_DB_PATH` (default `./data/name-tokens.sqlite`)
+- `DNS_NOSTR_BITCOIN_RPC_URL` (default `http://127.0.0.1:18443`)
+- `DNS_NOSTR_BITCOIN_RPC_USER` (default `rpcuser`)
+- `DNS_NOSTR_BITCOIN_RPC_PASSWORD` (default `rpcpassword`; redacted in logs/`Debug`)
+- `DNS_NOSTR_NOSTR_RELAY_URL` (default `ws://localhost:8080`)
+- `DNS_NOSTR_SYNC_INTERVAL_MS` (default `1000`)
+
+**`dns_nostr_wallet`:**
+- `DNS_NOSTR_NETWORK` (`regtest` default, `testnet`, `mainnet`)
+- `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`)
 
 ---
 
@@ -144,5 +162,6 @@ Server endpoints are hardcoded (see the server README).
 ## Debugging and Troubleshooting
 
 - **Nostr**: inspect relay events with [nostrdebug.com](https://nostrdebug.com/) on `ws://localhost:8080`.
-- **Bitcoin RPC**: `docker compose exec bitcoin-core bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword <command>`.
-- **SQLite state**: the server persists to `./data/name-tokens.sqlite` (gitignored); delete it to force a full resync.
+- **Bitcoin RPC**: `docker compose exec -T bitcoin-core bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword <command>`.
+- **SQLite state**: the server persists to `./data/name-tokens.sqlite` (WAL mode, gitignored); delete `./data/name-tokens.sqlite*` to force a full resync.
+- **One-time migration / full local reset**: if upgrading from the legacy `regtest_node/` volume or resetting local regtest + SQLite state from scratch, run `docker compose down -v && rm -f ./data/name-tokens.sqlite*`.

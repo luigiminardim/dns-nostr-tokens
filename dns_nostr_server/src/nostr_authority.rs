@@ -157,15 +157,29 @@ impl<GetTokenT: GetDnsNostrToken> NostrAuthority<GetTokenT> {
     }
 
     async fn get_zone_file(&self, name: &LowerName) -> Option<String> {
-        let token_label = self.extract_token_label(name)?;
-        let dns_nostr_token = self
+        let Some(token_label) = self.extract_token_label(name) else {
+            eprintln!("DNS lookup rejected: `{name}` is not a valid DNS-Nostr name under `{}`", self.origin());
+            return None;
+        };
+        let Some(dns_nostr_token) = self
             .dns_nostr_token_repository
             .get_token(&token_label)
-            .await?;
-        let last_text_note = self
+            .await
+        else {
+            eprintln!("DNS lookup miss: no active DNS-Nostr token for label `{token_label}`");
+            return None;
+        };
+        let Some(last_text_note) = self
             .nostr_events_repository
             .get_last_text_note_from_pubkey(dns_nostr_token.nostr_pubkey)
-            .await?;
+            .await
+        else {
+            eprintln!(
+                "DNS lookup miss: no Nostr text note found for label `{token_label}` (pubkey `{}`)",
+                dns_nostr_token.nostr_pubkey
+            );
+            return None;
+        };
         Some(last_text_note.content)
     }
 

@@ -27,7 +27,8 @@ These rules govern how agents should approach any task in this repository.
 ### 3. Verification Before Done
 
 - **Never** mark a task complete without proving it works.
-- Run the full test suite (`cargo test --workspace`) before considering work done.
+- Run the offline unit test suite (`just test` / `cargo test --workspace`) before considering any task done.
+- For any task modifying `name_token`, `dns_nostr_token`, `dns_nostr_server`, `dns_nostr_wallet`, `end_to_end`, `docker-compose.yml`, or `justfile`, also run `just test e2e` (self-contained: starts Docker infrastructure, builds `dns_nostr_server` and `dns_nostr_wallet`, and runs `end_to_end` automatically).
 - Verify your changes against the existing behavior.
 - Ask yourself: _"Would a staff engineer approve this?"_
 
