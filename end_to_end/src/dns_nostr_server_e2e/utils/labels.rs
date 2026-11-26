@@ -1,4 +1,5 @@
 use dns_nostr_token::label::Label;
+use hickory_proto::rr::LowerName;
 use rand::RngCore;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,6 +36,10 @@ pub fn unique_label(prefix: &str) -> Label {
     };
 
     Label::new(&candidate).expect("generated e2e label must satisfy RFC-1034 rules")
+}
+
+pub fn fqdn_for(label: &Label, zone_origin: &LowerName) -> String {
+    format!("{label}.{zone_origin}")
 }
 
 #[cfg(test)]

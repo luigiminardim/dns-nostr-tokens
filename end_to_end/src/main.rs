@@ -1,18 +1,9 @@
-mod bitcoin_token_tx;
-mod config;
-mod dns_client;
-mod just_runner;
-mod labels;
-mod nostr_publisher;
-mod server_process;
-mod server_scenarios;
-mod wallet_scenarios;
+mod dns_nostr_server_e2e;
+mod dns_nostr_wallet_e2e;
+mod utils;
 
-use bitcoin_token_tx::RegtestTokenClient;
-use config::E2eConfig;
-use dns_client::DnsClient;
-use server_process::ManagedServer;
 use std::process::ExitCode;
+use utils::{config::E2eConfig, regtest_bitcoin::RegtestBitcoinClient};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -25,16 +16,7 @@ async fn main() -> ExitCode {
     };
     println!("Running end_to_end with config: {config:?}");
 
-    let server = match ManagedServer::start(&config).await {
-        Ok(server) => server,
-        Err(error) => {
-            eprintln!("[FAIL] server startup: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let dns_client = DnsClient::new(config.dns_server_addr);
-    let bitcoin_client = match RegtestTokenClient::new(
+    let bitcoin_client = match RegtestBitcoinClient::new(
         &config.bitcoin_rpc_user,
         &config.bitcoin_rpc_password,
     ) {
@@ -45,24 +27,24 @@ async fn main() -> ExitCode {
         }
     };
 
-    if let Err((scenario, error)) =
-        server_scenarios::run_all(&config, &dns_client, &bitcoin_client).await
-    {
-        eprintln!("[FAIL] {scenario}: {error}");
-        let server_stderr = server.captured_stderr();
-        if !server_stderr.trim().is_empty() {
-            eprintln!("--- dns_nostr_server stderr ---\n{}", server_stderr.trim());
+    let mut passed = 0;
+
+    match dns_nostr_server_e2e::run_all(&config, &bitcoin_client).await {
+        Ok(count) => passed += count,
+        Err((scenario, error)) => {
+            eprintln!("[FAIL] {scenario}: {error}");
+            return ExitCode::FAILURE;
         }
-        return ExitCode::FAILURE;
     }
 
-    drop(server);
-
-    if let Err((scenario, error)) = wallet_scenarios::run_all(&config, &bitcoin_client) {
-        eprintln!("[FAIL] {scenario}: {error}");
-        return ExitCode::FAILURE;
+    match dns_nostr_wallet_e2e::run_all(&config, &bitcoin_client) {
+        Ok(count) => passed += count,
+        Err((scenario, error)) => {
+            eprintln!("[FAIL] {scenario}: {error}");
+            return ExitCode::FAILURE;
+        }
     }
 
-    println!("All 13 end-to-end scenarios passed.");
+    println!("All {passed} end-to-end scenarios passed.");
     ExitCode::SUCCESS
 }

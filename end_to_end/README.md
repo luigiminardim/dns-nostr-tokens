@@ -1,19 +1,20 @@
 # end_to_end
 
 ## Overview
-Workspace binary crate providing self-contained black-box end-to-end verification for `dns_nostr_server` (spawning the host-built `dns_nostr_server` binary against the shared SQLite database, live Bitcoin Core regtest, and live Nostr relay) and `dns_nostr_wallet` (black-box CLI execution against temporary wallet directories).
+Workspace binary crate providing self-contained black-box end-to-end verification for `dns_nostr_server` (spawning the host-built `dns_nostr_server` binary against the shared SQLite database, live Bitcoin Core regtest, and live Nostr relay) and `dns_nostr_wallet` (black-box CLI execution against temporary wallet directories), organized into a project / feature / scenario hierarchy.
 
 ## Interface
 - Package `end_to_end` (`Cargo.toml`):
-  - Binary target (`src/main.rs`): fail-fast E2E runner wiring the shared harness and scenario modules — see [`./src/README.md`](./src/README.md).
-  - Server scenarios (`src/server_scenarios.rs`): five sequential black-box DNS scenarios (`not_found_returns_nxdomain`, `minted_resolves_txt_pubkey`, `updated_rotates_to_new_nostr_pubkey`, `first_is_root_ignores_competing_mint`, `revoked_returns_nxdomain`).
-  - Wallet scenarios (`src/wallet_scenarios.rs`): eight sequential black-box CLI scenarios against live regtest Bitcoin Core covering `create` (12-word phrase, `0600` DB permissions, duplicate rejection), `import` via CLI args and stdin, `address` auto-advance, cross-network genesis-mismatch and invalid-network rejection, error paths without leaking seed words, receive & pre-/post-confirmation balance tracking, send & consecutive unconfirmed `trusted_pending` change spends, and historical `wallet import` recovery.
+  - Binary target (`src/main.rs`): fail-fast E2E composition root wiring `utils/`, `dns_nostr_server_e2e/`, and `dns_nostr_wallet_e2e/` — see [`./src/README.md`](./src/README.md).
+  - Shared utilities (`src/utils/`): `E2eConfig`, `JustCommand`, `RegtestBitcoinClient`, and `scenario_runner` — see [`./src/utils/README.md`](./src/utils/README.md).
+  - Server suite (`src/dns_nostr_server_e2e/`): 5 sequential black-box DNS scenarios across 4 Name-Token lifecycle feature folders (`lookup_e2e/`, `mint_e2e/`, `update_e2e/`, `revoke_e2e/`) with server-local helpers in `utils/` — see [`./src/dns_nostr_server_e2e/README.md`](./src/dns_nostr_server_e2e/README.md).
+  - Wallet suite (`src/dns_nostr_wallet_e2e/`): 13 sequential atomic black-box CLI scenarios across 5 feature folders (`create_e2e/`, `import_e2e/`, `address_e2e/`, `balance_e2e/`, `send_e2e/`) with wallet-local helpers in `utils/` — see [`./src/dns_nostr_wallet_e2e/README.md`](./src/dns_nostr_wallet_e2e/README.md).
 
 ## Invariants
 - `cargo test --workspace` / `just test` compiles the entire `end_to_end` binary crate and runs its offline co-located unit tests with zero Docker or network dependencies and without executing `main()`.
-- `end_to_end` spawns the host-built `dns_nostr_server` binary via an RAII guard (`ManagedServer`) inheriting `DNS_NOSTR_*` (using the shared `DNS_NOSTR_DB_PATH` SQLite database and configured `DNS_NOSTR_BIND_ADDR`), waits for DNS readiness, fails fast on early exit or the first scenario error, and terminates/reaps `dns_nostr_server` unconditionally on exit.
+- `dns_nostr_server_e2e` spawns the host-built `dns_nostr_server` binary via an RAII guard (`ManagedServer`) inheriting `DNS_NOSTR_*` (using the shared `DNS_NOSTR_DB_PATH` SQLite database and configured `DNS_NOSTR_BIND_ADDR`), waits for DNS readiness, fails fast on early exit or the first scenario error, and terminates/reaps `dns_nostr_server` unconditionally on exit.
 - All DNS scenarios use unique letter-prefixed lowercase labels (`e2e-<prefix>-<unix_ts>-<rand_hex>`) and real P2PKH-signed Token UTXOs (`<inscription> <P2PKH>`), allowing repeated runs against persistent Docker volumes and the shared SQLite database without collisions.
-- `wallet_scenarios` isolates every scenario in a fresh auto-cleaned temporary `DNS_NOSTR_WALLET_DIR`.
+- `dns_nostr_wallet_e2e` isolates every scenario in a fresh auto-cleaned temporary `DNS_NOSTR_WALLET_DIR`.
 
 ## Side Effects
 - When executed (`just test-e2e` / `cargo run -p end_to_end`):

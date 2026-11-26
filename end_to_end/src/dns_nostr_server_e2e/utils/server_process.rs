@@ -1,4 +1,5 @@
-use crate::{config::E2eConfig, dns_client::DnsClient};
+use super::dns_client::DnsClient;
+use crate::utils::config::E2eConfig;
 use std::{
     io::Read,
     net::{SocketAddr, UdpSocket},

@@ -3,13 +3,13 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub struct JustRunner {
+pub struct JustCommand {
     workspace_root: PathBuf,
     rpc_user: String,
     rpc_password: String,
 }
 
-impl JustRunner {
+impl JustCommand {
     pub fn new(rpc_user: &str, rpc_password: &str) -> Result<Self, String> {
         let workspace_root = Self::workspace_root()?;
         Ok(Self {
@@ -66,12 +66,12 @@ impl JustRunner {
 }
 
 #[cfg(test)]
-mod test_just_runner {
+mod test_just_command {
     use super::*;
 
     #[test]
     fn workspace_root_contains_justfile() {
-        let root = JustRunner::workspace_root().expect("workspace root should resolve");
+        let root = JustCommand::workspace_root().expect("workspace root should resolve");
         assert!(
             root.join("justfile").is_file(),
             "expected justfile at {}",
@@ -81,14 +81,17 @@ mod test_just_runner {
 
     #[test]
     fn format_command_error_includes_args_code_and_stderr() {
-        let with_stderr =
-            JustRunner::format_command_error(&["miner-fund", "bcrt1q...", "1.0"], Some(1), "boom\n");
+        let with_stderr = JustCommand::format_command_error(
+            &["miner-fund", "bcrt1q...", "1.0"],
+            Some(1),
+            "boom\n",
+        );
         assert_eq!(
             with_stderr,
             "`just miner-fund bcrt1q... 1.0` failed with exit status 1: boom"
         );
 
-        let without_stderr = JustRunner::format_command_error(&["miner-balance"], None, "   ");
+        let without_stderr = JustCommand::format_command_error(&["miner-balance"], None, "   ");
         assert_eq!(
             without_stderr,
             "`just miner-balance` failed with exit status signal"

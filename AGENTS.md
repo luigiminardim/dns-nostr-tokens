@@ -63,7 +63,7 @@ UTXO scanning unless explicitly asked.
 | `dns_nostr_token/` | [README](dns_nostr_token/README.md), [src](dns_nostr_token/src/README.md) | `Label`, `DnsNostrToken`, `DnsNostrService` |
 | `dns_nostr_server/` | [README](dns_nostr_server/README.md), [src](dns_nostr_server/src/README.md) | DNS authority, SQLite repository, Bitcoin watcher, Nostr lookups, env config |
 | `dns_nostr_wallet/` | [README](dns_nostr_wallet/README.md), [src](dns_nostr_wallet/src/README.md), [adapters](dns_nostr_wallet/src/adapters/README.md), [application](dns_nostr_wallet/src/application/README.md), [domain](dns_nostr_wallet/src/domain/README.md) | Wallet CLI |
-| `end_to_end/` | [README](end_to_end/README.md), [src](end_to_end/src/README.md) | Self-contained black-box E2E binary crate (`src/main.rs`) and shared harness |
+| `end_to_end/` | [README](end_to_end/README.md), [src](end_to_end/src/README.md), [utils](end_to_end/src/utils/README.md), [dns_nostr_server_e2e](end_to_end/src/dns_nostr_server_e2e/README.md), [dns_nostr_wallet_e2e](end_to_end/src/dns_nostr_wallet_e2e/README.md) | Self-contained black-box E2E binary crate (`src/main.rs`) and project/feature/scenario suites |
 
 Other: `docs/` (domain model & designs), `report.md` (technical report),
 `data/zone-files/` (example zone), `.data/` (gitignored local runtime data),

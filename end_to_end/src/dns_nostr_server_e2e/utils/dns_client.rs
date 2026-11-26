@@ -1,10 +1,16 @@
-use crate::labels::unique_label;
+use super::labels::unique_label;
+use crate::utils::config::E2eConfig;
 use hickory_proto::{
     op::{Message, MessageType, OpCode, Query, ResponseCode},
     rr::{Name, RData, RecordType},
     serialize::binary::{BinDecodable, BinEncodable},
 };
-use std::{fmt, net::SocketAddr, str::FromStr, time::Duration};
+use std::{
+    fmt,
+    net::SocketAddr,
+    str::FromStr,
+    time::{Duration, Instant},
+};
 use tokio::net::UdpSocket;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +60,28 @@ impl DnsClient {
     pub async fn query_txt(&self, fqdn: &str) -> Result<DnsResponse, DnsClientError> {
         self.query_txt_with_timeout(fqdn, Duration::from_secs(3))
             .await
+    }
+
+    pub async fn poll_txt_until(
+        &self,
+        fqdn: &str,
+        config: &E2eConfig,
+        predicate: impl Fn(&DnsResponse) -> bool,
+    ) -> Result<DnsResponse, Result<DnsResponse, DnsClientError>> {
+        let deadline = Instant::now() + config.poll_timeout();
+        let poll_interval = config.poll_interval();
+        loop {
+            let last = self.query_txt(fqdn).await;
+            if let Ok(ref response) = last {
+                if predicate(response) {
+                    return Ok(response.clone());
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(last);
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     pub async fn preflight_check(&self, zone_origin: &str) -> Result<(), String> {
@@ -140,7 +168,8 @@ impl DnsClient {
             .iter()
             .filter_map(|record| match record.data() {
                 Some(RData::TXT(txt)) => {
-                    let combined: Vec<u8> = txt.iter().flat_map(|chunk| chunk.iter().copied()).collect();
+                    let combined: Vec<u8> =
+                        txt.iter().flat_map(|chunk| chunk.iter().copied()).collect();
                     Some(String::from_utf8_lossy(&combined).into_owned())
                 }
                 _ => None,
