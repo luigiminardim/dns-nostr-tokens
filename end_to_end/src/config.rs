@@ -85,7 +85,7 @@ impl E2eConfig {
             Ok(binary_path)
         } else {
             Err(format!(
-                "{binary_name} binary not found at `{}`; build it with `cargo build -p {binary_name}` or run `just test e2e`",
+                "{binary_name} binary not found at `{}`; build it with `cargo build -p {binary_name}` or run `just test-e2e`",
                 binary_path.display()
             ))
         }

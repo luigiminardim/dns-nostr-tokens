@@ -1,6 +1,7 @@
 mod bitcoin_token_tx;
 mod config;
 mod dns_client;
+mod just_runner;
 mod labels;
 mod nostr_publisher;
 mod server_process;
@@ -34,7 +35,6 @@ async fn main() -> ExitCode {
 
     let dns_client = DnsClient::new(config.dns_server_addr);
     let bitcoin_client = match RegtestTokenClient::new(
-        &config.bitcoin_rpc_url,
         &config.bitcoin_rpc_user,
         &config.bitcoin_rpc_password,
     ) {
@@ -58,11 +58,11 @@ async fn main() -> ExitCode {
 
     drop(server);
 
-    if let Err((scenario, error)) = wallet_scenarios::run_all() {
+    if let Err((scenario, error)) = wallet_scenarios::run_all(&config, &bitcoin_client) {
         eprintln!("[FAIL] {scenario}: {error}");
         return ExitCode::FAILURE;
     }
 
-    println!("All 10 end-to-end scenarios passed.");
+    println!("All 13 end-to-end scenarios passed.");
     ExitCode::SUCCESS
 }

@@ -2,10 +2,11 @@
 
 > This project is a work-in-progress. The codebase currently contains the
 > `name_token` and `dns_nostr_token` (domain libraries), `dns_nostr_server`,
-> `dns_nostr_wallet`, and `end_to_end` crates. The wallet currently only
-> creates/imports a BIP39 seed and derives addresses and keys; token operations
-> and send/receive are not built yet. All guidance below applies to **what is
-> built today**.
+> `dns_nostr_wallet`, and `end_to_end` crates. The wallet supports BIP39 seed
+> creation/import, BIP 84 Bitcoin Core RPC sync, receive addresses, balance
+> checks, and sending Bitcoin; Name-Token operations (mint/update/revoke and
+> Token UTXO scanning) are not built yet. All guidance below applies to **what
+> is built today**.
 
 > **Agent orchestration rules** (workflow, core principles, behavioral guardrails)
 > are defined in [`.agents/rules/agent-orchestration.md`](.agents/rules/agent-orchestration.md)
@@ -39,8 +40,10 @@ are defined in [`docs/domain.md`](docs/domain.md).
 
 ```
 DNS Client ──DNS──▶ dns_nostr_server ──RPC──▶ Bitcoin Node (regtest)
-                           │
-                           └──WebSocket──▶ Nostr Relay
+                           │                      ▲
+                           └──WebSocket──▶ Nostr Relay  │
+                                                  │ RPC
+                                          dns_nostr_wallet
 
 dns_nostr_server ──▶ dns_nostr_token ──▶ name_token
 dns_nostr_wallet ──▶ dns_nostr_token
@@ -48,9 +51,9 @@ end_to_end       ──▶ dns_nostr_server, dns_nostr_token, name_token
 ```
 
 Dependencies point inward; `main.rs` in each binary crate is the composition
-root. The wallet is only partially built (seed create/import, receive address,
-key derivation): do not add token operations, UTXO scanning or send/receive
-unless explicitly asked.
+root. The wallet supports Standard UTXO (BIP 84) sync, balance, and send
+operations against Bitcoin Core RPC; do not add Name-Token operations or Token
+UTXO scanning unless explicitly asked.
 
 ### Subdirectories & Contracts
 
@@ -117,15 +120,20 @@ functions, clean error handling, and co-located tests.
 Prerequisites: Rust toolchain, Docker & Docker Compose, and `just`.
 
 ```bash
+just build                                      # build all workspace crates
 just test                                       # offline workspace unit tests (no Docker needed)
-just test up                                    # start bitcoin-core (regtest) + nostr-relay and wait until healthy
-just test down                                  # stop containers (preserves Docker volumes)
+just test-e2e                                   # run self-contained full-stack E2E suite (starts Docker + spawns dns_nostr_server)
+just containers-up                              # start bitcoin-core (regtest) + nostr-relay and wait until healthy
+just containers-down                            # stop containers (preserves Docker volumes)
+just containers-reset                           # stop containers, wipe Docker volumes, and delete server SQLite DB
 just serve                                      # run dns_nostr_server (UDP :1053 by default)
-just test e2e                                   # run self-contained full-stack E2E suite (starts Docker + spawns dns_nostr_server)
-just wallet create | import [WORDS...] | address # run dns_nostr_wallet CLI
-just fund <BTC> <Address>                       # fund regtest address from miner wallet + mine 1 block
-cargo build --workspace
-dig @localhost -p 1053 <label>.nostr.dns.name TXT # manual check
+just wallet create | import [WORDS...] | address | balance | send <address> <btc> # run dns_nostr_wallet CLI
+just bitcoin-cli <args...>                      # pass-through to regtest bitcoin-cli inside bitcoin-core container
+just miner-address                              # print a regtest address from the local miner wallet
+just miner-balance                              # print the spendable BTC balance of the local miner wallet
+just miner-fund <address> <btc> [--no-mine]     # fund regtest address from miner wallet (auto-mines 1 block unless --no-mine)
+just miner-mineblock [count]                    # mine regtest block(s) to miner wallet and print block hash(es)
+just dns-query <label> [type]                   # query local dns_nostr_server via dig (default type TXT)
 ```
 
 ### Environment Variables
@@ -143,6 +151,9 @@ dig @localhost -p 1053 <label>.nostr.dns.name TXT # manual check
 **`dns_nostr_wallet`:**
 - `DNS_NOSTR_NETWORK` (`regtest` default, `testnet`, `mainnet`)
 - `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`)
+- `DNS_NOSTR_BITCOIN_RPC_URL` (default `http://127.0.0.1:18443`)
+- `DNS_NOSTR_BITCOIN_RPC_USER` (default `rpcuser`)
+- `DNS_NOSTR_BITCOIN_RPC_PASSWORD` (default `rpcpassword`; redacted in `Debug`)
 
 ---
 
@@ -153,6 +164,15 @@ dig @localhost -p 1053 <label>.nostr.dns.name TXT # manual check
 - Domain value types derive `Debug, Clone, PartialEq, Eq` (plus `serde` when serialized); entities holding secret keys implement custom `Debug` to avoid leaking secrets.
 - Libraries expose `lib.rs`; `main.rs` is thin and only wires dependencies.
 - Naming: `PascalCase` types, `snake_case` functions and files, `test_<concept>` test modules.
+- **Architectural role naming convention**: Structs and file names must be postfixed with their architectural class type / role:
+  - **Use Cases** (`application/`): Postfixed with `Usecase` and `*_usecase.rs` (e.g., `SendBitcoinUsecase` in `send_bitcoin_usecase.rs`, `GetBalanceUsecase` in `get_balance_usecase.rs`, `CreateWalletUsecase` in `create_wallet_usecase.rs`).
+  - **Domain Services** (`domain/`): Postfixed with `Service` and `*_service.rs` (e.g., `SyncService` in `sync_service.rs`, `NameTokenService` in `name_token_service.rs`, `DnsNostrService` in `dns_nostr_service.rs`).
+  - **Repositories** (`domain/` and `adapters/`): Postfixed with `Repository` and `*_repository.rs` (`Repository` is already a role postfix — do not add `Port` or `Adapter`, e.g., `NameTokenWalletRepository` in `name_token_wallet_repository.rs`, `SqliteNameTokenWalletRepository` in `sqlite_name_token_wallet_repository.rs`).
+  - **Ports** (`domain/`): Postfixed with `Port` and `*_port.rs` (e.g., `BlockchainPort` in `blockchain_port.rs`).
+  - **Adapters** (`adapters/`): Postfixed with `Adapter` and `*_adapter.rs` (e.g., `RpcBlockchainAdapter` in `rpc_blockchain_adapter.rs`).
+  - **Controllers** (`adapters/`): Postfixed with `Controller` and `*_controller.rs` (e.g., `CliController` in `cli_controller.rs`).
+  - **Entities / Aggregates**: Ubiquitous language domain nouns without suffix (e.g., `DnsNostrWallet`, `Label`, `NameToken`).
+  - **Policies**: Postfixed with `Policy` and `*_policy.rs` (e.g., `KeyDerivationPolicy` in `key_derivation_policy.rs`).
 - Avoid creating one-line helper functions without expressive domain meaning that are not reused across multiple places.
 - Avoid declaring constants in global/module scope if they are not reused; scope single-use constants locally inside the function or method that uses them.
 - Keep helper functions that belong to a policy, entity, service, or adapter as private methods inside its `impl` block rather than as free module-level functions.
@@ -162,6 +182,6 @@ dig @localhost -p 1053 <label>.nostr.dns.name TXT # manual check
 ## Debugging and Troubleshooting
 
 - **Nostr**: inspect relay events with [nostrdebug.com](https://nostrdebug.com/) on `ws://localhost:8080`.
-- **Bitcoin RPC**: `docker compose exec -T bitcoin-core bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpassword <command>`.
+- **Bitcoin RPC**: `just bitcoin-cli <command>`.
 - **SQLite state**: the server persists to `./data/name-tokens.sqlite` (WAL mode, gitignored); delete `./data/name-tokens.sqlite*` to force a full resync.
-- **One-time migration / full local reset**: if upgrading from the legacy `regtest_node/` volume or resetting local regtest + SQLite state from scratch, run `docker compose down -v && rm -f ./data/name-tokens.sqlite*`.
+- **One-time migration / full local reset**: if upgrading from the legacy `regtest_node/` volume or resetting local regtest + SQLite state from scratch, run `just containers-reset`.

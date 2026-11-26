@@ -31,4 +31,4 @@ Source of the `dns_nostr_server` crate: the infrastructure adapters and composit
 
 ## Verification
 - Unit tests: `cargo test -p dns_nostr_server` (or `just test`)
-- End-to-end tests (with `just serve` running): `just test e2e`
+- End-to-end tests: `just test-e2e`

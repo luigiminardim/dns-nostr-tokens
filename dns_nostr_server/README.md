@@ -25,4 +25,4 @@ Crate for the DNS-Nostr server: a DNS authority for a configurable zone (default
 
 ## Verification
 - Unit tests: `cargo test -p dns_nostr_server` (or `just test`)
-- End-to-end tests (with `just serve` running): `just test e2e`
+- End-to-end tests: `just test-e2e`

@@ -37,8 +37,8 @@ based on these Name-Tokens.
 
 ### DNS-Nostr Wallet
 
-- **Seed & Key Management (implemented)**: Create or import a BIP39 seed phrase, derive BIP 84 receive addresses (`wallet create | import | address`), and deterministically derive Name-Token P2PKH addresses and per-label Nostr keys.
-- **Standard Bitcoin Wallet Functions (planned)**: Send and receive satoshis.
+- **Seed & Key Management (implemented)**: Create or import a BIP39 seed phrase, derive BIP 84 receive addresses, and deterministically derive Name-Token P2PKH addresses and per-label Nostr keys.
+- **Standard Bitcoin Wallet Functions (implemented)**: Sync Standard UTXOs (BIP 84) with Bitcoin Core over JSON-RPC, check spendable balance, and send Bitcoin (`wallet create | import | address | balance | send <address> <btc>`).
 - **DNS-Nostr Name-Token** creation and management (planned):
   - Create _DNS-Nostr Name-Tokens_ on the Bitcoin blockchain (representing labels for subdomains).
   - Update the Nostr public key associated with a _DNS-Nostr Name-Token_, effectively changing the owner of the DNS records in the Nostr Network, which requires creating a new inscription.
@@ -54,18 +54,22 @@ based on these Name-Tokens.
 
 ### Wallet CLI (work in progress)
 
-Only seed management and address derivation are available so far. Domain and architectural details
+Seed management, BIP 84 blockchain sync, receive addresses, balance queries, and Bitcoin sends are available. Domain and architectural details
 are in [`docs/domain.md`](docs/domain.md) and [`dns_nostr_wallet/README.md`](dns_nostr_wallet/README.md).
 
 ```bash
-cargo run -p dns_nostr_wallet -- wallet create             # new 12-word BIP39 seed
-cargo run -p dns_nostr_wallet -- wallet import <WORDS...>  # or pipe the phrase via stdin
-cargo run -p dns_nostr_wallet -- wallet address            # receive address
+cargo run -p dns_nostr_wallet -- wallet create                     # new 12-word BIP39 seed (tip-anchored)
+cargo run -p dns_nostr_wallet -- wallet import <WORDS...>          # or pipe the phrase via stdin (scans from height 0)
+cargo run -p dns_nostr_wallet -- wallet address                    # next BIP 84 receive address
+cargo run -p dns_nostr_wallet -- wallet balance                    # spendable balance in BTC
+cargo run -p dns_nostr_wallet -- wallet send <ADDRESS> <BTC>       # sign and broadcast a Bitcoin transfer
 ```
 
 Configuration is read from `DNS_NOSTR_NETWORK` (`regtest` by default, `testnet`,
-`mainnet`) and `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`; the
-mnemonic is stored in plain text in `wallet.sqlite`, file mode `0600`).
+`mainnet`), `DNS_NOSTR_WALLET_DIR` (default `./.data/dns-nostr-wallet`; the
+mnemonic is stored in plain text in `wallet.sqlite`, file mode `0600`), and
+`DNS_NOSTR_BITCOIN_RPC_URL` / `DNS_NOSTR_BITCOIN_RPC_USER` /
+`DNS_NOSTR_BITCOIN_RPC_PASSWORD`.
 
 ## Architecture
 

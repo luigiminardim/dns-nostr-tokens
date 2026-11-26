@@ -10,9 +10,10 @@ Binary entry point, harness modules, and fail-fast scenario suites for the `end_
 - [`labels.rs`](./labels.rs): `unique_label(prefix: &str) -> dns_nostr_token::label::Label`.
 - [`dns_client.rs`](./dns_client.rs): `DnsResponse`, `DnsClientError`, `DnsClient` (`new`, `query_txt`, `preflight_check`).
 - [`nostr_publisher.rs`](./nostr_publisher.rs): `publish_txt_zone_file(relay_url, keys, txt_value) -> Result<EventId, String>`.
-- [`bitcoin_token_tx.rs`](./bitcoin_token_tx.rs): `TokenUtxo`, `build_token_script_pubkey(label, nostr_pubkey, owner_pubkey_hash) -> ScriptBuf`, `RegtestTokenClient` (`new`, `mint_token`, `update_token`, `revoke_token`).
+- [`just_runner.rs`](./just_runner.rs): `JustRunner` (`new`, `run`) executing workspace `just` recipes with forwarded `DNS_NOSTR_BITCOIN_RPC_USER` / `DNS_NOSTR_BITCOIN_RPC_PASSWORD`.
+- [`bitcoin_token_tx.rs`](./bitcoin_token_tx.rs): `TokenUtxo`, `build_token_script_pubkey(label, nostr_pubkey, owner_pubkey_hash) -> ScriptBuf`, `RegtestTokenClient` (`new`, `fund_address`, `fund_address_unconfirmed`, `mine_one_block`, `mint_token`, `update_token`, `revoke_token`).
 - [`server_scenarios.rs`](./server_scenarios.rs): `run_all(config, dns_client, bitcoin_client) -> Result<(), (&'static str, String)>`.
-- [`wallet_scenarios.rs`](./wallet_scenarios.rs): `run_all() -> Result<(), (&'static str, String)>`.
+- [`wallet_scenarios.rs`](./wallet_scenarios.rs): `run_all(config, bitcoin_client) -> Result<(), (&'static str, String)>`.
 
 ## Invariants
 - `E2eConfig` reuses `dns_nostr_server::environment_config::EnvironmentConfig` as the single config parser and redacts `bitcoin_rpc_password` as `"[REDACTED]"` in `Debug`.
@@ -20,12 +21,12 @@ Binary entry point, harness modules, and fail-fast scenario suites for the `end_
 - `unique_label` always produces a valid RFC-1034 `Label` (`<= 63` bytes, lowercase ASCII starting with `e2e-`).
 - `DnsClient::query_txt` enforces a `3`-second UDP timeout and validates response message ID matching; `preflight_check` uses a `1`-second timeout and requires `ResponseCode::NXDomain` for an unminted label under `<zone_origin>`.
 - `publish_txt_zone_file` asserts relay acceptance (`!output.success.is_empty()`) and unconditionally calls `client.shutdown().await`.
-- `RegtestTokenClient` uses a wallet-scoped `/wallet/miner` client, enforces a `500`-block top-up cap to detect regtest subsidy halving exhaustion, and signs real legacy P2PKH signatures over `<inscription> <P2PKH>` scripts (preserving same-index `0 -> 0` continuity on updates).
+- `RegtestTokenClient` delegates regtest wallet setup, funding, mining, raw-tx fetch, broadcast, and block-height queries to workspace `just` commands (`miner-address`, `miner-balance`, `miner-fund`, `miner-mineblock`, `bitcoin-cli`) via `JustRunner`, and signs real legacy P2PKH signatures over `<inscription> <P2PKH>` scripts (preserving same-index `0 -> 0` continuity on updates).
 
 ## Side Effects
-- Unit tests in `config.rs`, `server_process.rs`, `labels.rs`, `dns_client.rs`, and `bitcoin_token_tx.rs` perform no network or disk I/O.
-- Runtime execution spawns `dns_nostr_server` and `dns_nostr_wallet`, performs UDP DNS queries, Nostr WebSocket publishing, and Bitcoin Core regtest RPC calls / mining.
+- Unit tests in `config.rs`, `server_process.rs`, `labels.rs`, `dns_client.rs`, `just_runner.rs`, and `bitcoin_token_tx.rs` perform no network or disk I/O.
+- Runtime execution spawns `dns_nostr_server`, `dns_nostr_wallet`, and workspace `just` subcommands (`docker compose exec -T bitcoin-core bitcoin-cli ...`), and performs UDP DNS queries and Nostr WebSocket publishing.
 
 ## Verification
 - Unit tests: `cargo test -p end_to_end` (included in `just test`)
-- Full E2E runner: `just test e2e`
+- Full E2E runner: `just test-e2e`

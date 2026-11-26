@@ -1,5 +1,7 @@
+use crate::just_runner::JustRunner;
 use bitcoin::{
     absolute::LockTime,
+    consensus::encode::{deserialize_hex, serialize_hex},
     hashes::Hash,
     opcodes::{
         all::{OP_CHECKSIG, OP_DUP, OP_ENDIF, OP_EQUALVERIFY, OP_HASH160, OP_IF, OP_NOP},
@@ -8,12 +10,12 @@ use bitcoin::{
     script::{Builder, PushBytesBuf},
     secp256k1::{Message, Secp256k1, SecretKey},
     sighash::{EcdsaSighashType, SighashCache},
-    transaction, Address, Amount, CompressedPublicKey, Network, OutPoint, PubkeyHash, ScriptBuf,
-    Sequence, Transaction, TxIn, TxOut, Txid, Witness,
+    transaction, Address, Amount, BlockHash, CompressedPublicKey, Denomination, Network, OutPoint,
+    PubkeyHash, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
-use bitcoincore_rpc::{Auth, Client, RpcApi};
 use dns_nostr_token::label::Label;
 use rand::RngCore;
+use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct TokenUtxo {
@@ -55,80 +57,50 @@ pub fn build_token_script_pubkey(
 }
 
 pub struct RegtestTokenClient {
-    wallet_client: Client,
-    miner_address: Address,
+    just: JustRunner,
     secp: Secp256k1<bitcoin::secp256k1::All>,
 }
 
 impl RegtestTokenClient {
-    pub fn new(rpc_url: &str, rpc_user: &str, rpc_password: &str) -> Result<Self, String> {
-        let miner_wallet_name = "miner";
-        let min_spendable_balance = Amount::from_sat(1_000_000);
-        let max_topup_blocks: u64 = 500;
-        let topup_batch: u64 = 10;
+    pub fn new(rpc_user: &str, rpc_password: &str) -> Result<Self, String> {
+        let just = JustRunner::new(rpc_user, rpc_password)?;
 
-        let root_auth = Auth::UserPass(rpc_user.to_string(), rpc_password.to_string());
-        let root_client = Client::new(rpc_url, root_auth)
-            .map_err(|error| format!("failed to construct root Bitcoin RPC client: {error}"))?;
+        let raw_address = just.run(&["miner-address"])?;
+        Self::parse_regtest_address(&raw_address)?;
 
-        let loaded_wallets = root_client
-            .list_wallets()
-            .map_err(|error| format!("failed to list Bitcoin wallets: {error}"))?;
-        if !loaded_wallets.iter().any(|name| name == miner_wallet_name) {
-            if root_client.load_wallet(miner_wallet_name).is_err() {
-                root_client
-                    .create_wallet(miner_wallet_name, None, None, None, None)
-                    .map_err(|error| {
-                        format!("failed to create `{miner_wallet_name}` wallet: {error}")
-                    })?;
-            }
-        }
-
-        let wallet_url = format!("{}/wallet/{miner_wallet_name}", rpc_url.trim_end_matches('/'));
-        let wallet_auth = Auth::UserPass(rpc_user.to_string(), rpc_password.to_string());
-        let wallet_client = Client::new(&wallet_url, wallet_auth)
-            .map_err(|error| format!("failed to construct wallet Bitcoin RPC client: {error}"))?;
-
-        let miner_address = wallet_client
-            .get_new_address(None, None)
-            .map_err(|error| format!("failed to derive miner address: {error}"))?
-            .require_network(Network::Regtest)
-            .map_err(|error| format!("miner address is not on regtest: {error}"))?;
-
-        let height = wallet_client
-            .get_block_count()
-            .map_err(|error| format!("failed to read block count: {error}"))?;
-        if height < 101 {
-            wallet_client
-                .generate_to_address(101 - height, &miner_address)
-                .map_err(|error| format!("failed to mine maturity blocks: {error}"))?;
-        }
-
-        let mut mined_topup: u64 = 0;
-        while wallet_client
-            .get_balance(None, None)
-            .map_err(|error| format!("failed to read miner balance: {error}"))?
-            < min_spendable_balance
-        {
-            if mined_topup >= max_topup_blocks {
-                return Err(
-                    "miner wallet balance remained below 0.01 BTC after mining 500 blocks \
-                     (likely regtest subsidy halving exhaustion). Reset local state with: \
-                     docker compose down -v && rm -f ./data/name-tokens.sqlite*"
-                        .to_string(),
-                );
-            }
-            wallet_client
-                .generate_to_address(topup_batch, &miner_address)
-                .map_err(|error| format!("failed to mine top-up blocks: {error}"))?;
-            mined_topup += topup_batch;
-        }
+        let raw_balance = just.run(&["miner-balance"])?;
+        Self::parse_btc_amount(&raw_balance)?;
 
         Ok(Self {
-            wallet_client,
-            miner_address,
+            just,
             secp: Secp256k1::new(),
         })
+    }
+
+    pub fn fund_address(&self, address: &Address, amount: Amount) -> Result<Txid, String> {
+        let btc = Self::format_btc_amount(amount);
+        let addr_str = address.to_string();
+        let raw_txid = self.just.run(&["miner-fund", &addr_str, &btc])?;
+        Self::parse_txid(&raw_txid)
+    }
+
+    pub fn fund_address_unconfirmed(
+        &self,
+        address: &Address,
+        amount: Amount,
+    ) -> Result<Txid, String> {
+        let btc = Self::format_btc_amount(amount);
+        let addr_str = address.to_string();
+        let raw_txid = self.just.run(&["miner-fund", &addr_str, &btc, "--no-mine"])?;
+        Self::parse_txid(&raw_txid)
+    }
+
+    pub fn mine_one_block(&self) -> Result<(BlockHash, u64), String> {
+        let raw_hash = self.just.run(&["miner-mineblock"])?;
+        let block_hash = Self::parse_block_hash(&raw_hash)?;
+        let raw_height = self.just.run(&["bitcoin-cli", "getblockcount"])?;
+        let height = Self::parse_block_height(&raw_height)?;
+        Ok((block_hash, height))
     }
 
     pub fn mint_token(
@@ -145,25 +117,10 @@ impl RegtestTokenClient {
         let ephemeral_p2pkh_script = ScriptBuf::new_p2pkh(&owner_pubkey_hash);
         let ephemeral_address = Address::p2pkh(compressed_pubkey, Network::Regtest);
 
-        let funding_txid = self
-            .wallet_client
-            .send_to_address(
-                &ephemeral_address,
-                funding_amount,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|error| format!("failed to fund ephemeral key for `{label}`: {error}"))?;
+        let funding_txid = self.fund_address_unconfirmed(&ephemeral_address, funding_amount)?;
         let (funding_block_hash, _) = self.mine_one_block()?;
 
-        let funding_tx = self
-            .wallet_client
-            .get_raw_transaction(&funding_txid, Some(&funding_block_hash))
-            .map_err(|error| format!("failed to fetch funding tx `{funding_txid}`: {error}"))?;
+        let funding_tx = self.get_raw_transaction(&funding_txid, &funding_block_hash)?;
         let funding_vout = funding_tx
             .output
             .iter()
@@ -185,10 +142,7 @@ impl RegtestTokenClient {
             token_script_pubkey.clone(),
         )?;
 
-        let mint_txid = self
-            .wallet_client
-            .send_raw_transaction(&signed_tx)
-            .map_err(|error| format!("failed to broadcast mint tx for `{label}`: {error}"))?;
+        let mint_txid = self.send_raw_transaction(&signed_tx)?;
         let (_, block_height) = self.mine_one_block()?;
 
         Ok(TokenUtxo {
@@ -227,10 +181,7 @@ impl RegtestTokenClient {
             new_script_pubkey.clone(),
         )?;
 
-        let update_txid = self
-            .wallet_client
-            .send_raw_transaction(&signed_tx)
-            .map_err(|error| format!("failed to broadcast update tx for `{label}`: {error}"))?;
+        let update_txid = self.send_raw_transaction(&signed_tx)?;
         let (_, block_height) = self.mine_one_block()?;
 
         Ok(TokenUtxo {
@@ -262,13 +213,28 @@ impl RegtestTokenClient {
             plain_p2pkh_script,
         )?;
 
-        let revoke_txid = self
-            .wallet_client
-            .send_raw_transaction(&signed_tx)
-            .map_err(|error| format!("failed to broadcast revoke tx: {error}"))?;
+        let revoke_txid = self.send_raw_transaction(&signed_tx)?;
         let (_, block_height) = self.mine_one_block()?;
 
         Ok((revoke_txid, block_height))
+    }
+
+    fn get_raw_transaction(&self, txid: &Txid, block_hash: &BlockHash) -> Result<Transaction, String> {
+        let txid_str = txid.to_string();
+        let block_hash_str = block_hash.to_string();
+        let raw_hex = self
+            .just
+            .run(&["bitcoin-cli", "getrawtransaction", &txid_str, "false", &block_hash_str])?;
+        deserialize_hex(&raw_hex)
+            .map_err(|error| format!("failed to decode raw transaction `{txid}`: {error}"))
+    }
+
+    fn send_raw_transaction(&self, tx: &Transaction) -> Result<Txid, String> {
+        let raw_hex = serialize_hex(tx);
+        let raw_txid = self
+            .just
+            .run(&["bitcoin-cli", "sendrawtransaction", &raw_hex])?;
+        Self::parse_txid(&raw_txid)
     }
 
     fn build_and_sign_single_io_tx(
@@ -328,20 +294,35 @@ impl RegtestTokenClient {
         }
     }
 
-    fn mine_one_block(&self) -> Result<(bitcoin::BlockHash, u64), String> {
-        let hashes = self
-            .wallet_client
-            .generate_to_address(1, &self.miner_address)
-            .map_err(|error| format!("failed to mine confirmation block: {error}"))?;
-        let block_hash = hashes
-            .into_iter()
-            .next()
-            .ok_or_else(|| "generatetoaddress returned no block hashes".to_string())?;
-        let height = self
-            .wallet_client
-            .get_block_count()
-            .map_err(|error| format!("failed to read block height after mining: {error}"))?;
-        Ok((block_hash, height))
+    fn format_btc_amount(amount: Amount) -> String {
+        amount.to_string_in(Denomination::Bitcoin)
+    }
+
+    fn parse_regtest_address(raw: &str) -> Result<Address, String> {
+        Address::from_str(raw.trim())
+            .map_err(|error| format!("invalid miner address `{raw}`: {error}"))?
+            .require_network(Network::Regtest)
+            .map_err(|error| format!("miner address `{raw}` is not on regtest: {error}"))
+    }
+
+    fn parse_btc_amount(raw: &str) -> Result<Amount, String> {
+        Amount::from_str_in(raw.trim(), Denomination::Bitcoin)
+            .map_err(|error| format!("invalid BTC amount `{raw}`: {error}"))
+    }
+
+    fn parse_txid(raw: &str) -> Result<Txid, String> {
+        Txid::from_str(raw.trim()).map_err(|error| format!("invalid txid `{raw}`: {error}"))
+    }
+
+    fn parse_block_hash(raw: &str) -> Result<BlockHash, String> {
+        BlockHash::from_str(raw.trim())
+            .map_err(|error| format!("invalid block hash `{raw}`: {error}"))
+    }
+
+    fn parse_block_height(raw: &str) -> Result<u64, String> {
+        raw.trim()
+            .parse::<u64>()
+            .map_err(|error| format!("invalid block height `{raw}`: {error}"))
     }
 }
 
@@ -349,7 +330,6 @@ impl RegtestTokenClient {
 mod test_bitcoin_token_tx {
     use super::*;
     use bdk_chain::BlockId;
-    use bitcoin::BlockHash;
     use dns_nostr_token::dns_nostr_token::DnsNostrToken;
     use name_token::{Inscription, NameToken, NameTokenEvent, Position};
 
@@ -390,5 +370,51 @@ mod test_bitcoin_token_tx {
             DnsNostrToken::try_from(name_token).expect("DnsNostrToken conversion should succeed");
         assert_eq!(dns_nostr_token.label, label);
         assert_eq!(dns_nostr_token.nostr_pubkey, nostr_keys.public_key());
+    }
+
+    #[test]
+    fn format_btc_amount_produces_plain_decimal() {
+        assert_eq!(
+            RegtestTokenClient::format_btc_amount(Amount::from_sat(100_000)),
+            "0.001"
+        );
+        assert_eq!(
+            RegtestTokenClient::format_btc_amount(Amount::from_btc(1.5).unwrap()),
+            "1.5"
+        );
+    }
+
+    #[test]
+    fn parses_just_command_outputs_and_rejects_invalid_values() {
+        assert!(
+            RegtestTokenClient::parse_regtest_address(
+                "bcrt1q6rz28mcfaxtmd6v789l9rrlrusdprr9pz3cppk"
+            )
+            .is_ok()
+        );
+        assert!(RegtestTokenClient::parse_regtest_address("not-an-address").is_err());
+
+        assert_eq!(
+            RegtestTokenClient::parse_btc_amount("50.00000000").unwrap(),
+            Amount::from_btc(50.0).unwrap()
+        );
+        assert!(RegtestTokenClient::parse_btc_amount("abc").is_err());
+
+        let zero_txid = Txid::all_zeros();
+        assert_eq!(
+            RegtestTokenClient::parse_txid(&zero_txid.to_string()).unwrap(),
+            zero_txid
+        );
+        assert!(RegtestTokenClient::parse_txid("short").is_err());
+
+        let zero_hash = BlockHash::all_zeros();
+        assert_eq!(
+            RegtestTokenClient::parse_block_hash(&zero_hash.to_string()).unwrap(),
+            zero_hash
+        );
+        assert!(RegtestTokenClient::parse_block_hash("short").is_err());
+
+        assert_eq!(RegtestTokenClient::parse_block_height("101\n").unwrap(), 101);
+        assert!(RegtestTokenClient::parse_block_height("-1").is_err());
     }
 }
