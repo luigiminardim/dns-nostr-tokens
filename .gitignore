@@ -1,3 +1,6 @@
 target/
 .env
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.data/

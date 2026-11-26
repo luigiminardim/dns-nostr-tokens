@@ -1,0 +1,17 @@
+[package]
+name = "end_to_end"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+bitcoin.workspace = true
+dns_nostr_server = { path = "../dns_nostr_server" }
+dns_nostr_token = { path = "../dns_nostr_token" }
+hickory-proto = "0.24.2"
+name_token = { path = "../name_token" }
+nostr-sdk = "0.41.0"
+rand = "0.8.5"
+tokio.workspace = true
+
+[dev-dependencies]
+bdk_chain = "0.23.3"

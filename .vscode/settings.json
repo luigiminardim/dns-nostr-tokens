@@ -1,8 +1,0 @@
-{
-    "conventionalCommits.scopes": [
-        "regtest_node",
-        "nostr_relay",
-        "dns_nostr_server",
-        "dns_nostr_wallet"
-    ]
-}

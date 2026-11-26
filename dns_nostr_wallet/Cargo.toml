@@ -1,0 +1,13 @@
+[package]
+name = "dns_nostr_wallet"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+bdk_bitcoind_rpc.workspace = true
+bip39 = { version = "2.1", features = ["rand"] }
+bitcoin.workspace = true
+bdk_wallet = { version = "2.3", features = ["rusqlite"] }
+clap = { version = "4", features = ["derive"] }
+dns_nostr_token = { path = "../dns_nostr_token" }
+nostr-sdk = "0.41.0"

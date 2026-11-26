@@ -1,22 +1,38 @@
 services:
   bitcoin-core:
-    build:
-      context: ./regtest_node
-      dockerfile: Dockerfile
+    image: bitcoin/bitcoin:28.1-alpine
+    command:
+      - -regtest=1
+      - -server=1
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -fallbackfee=0.0002
+      - -acceptnonstdtxn=1
     ports:
-      - 18443:18443 # RPC
-      - 18444:18444 # P2P
+      - 127.0.0.1:18443:18443 # RPC
+      - 127.0.0.1:18444:18444 # P2P
     volumes:
-      - bitcoin-core:/root/.bitcoin
+      - bitcoin-core:/home/bitcoin/.bitcoin
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-regtest", "-rpcuser=rpcuser", "-rpcpassword=rpcpassword", "getblockchaininfo"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
 
   # Use https://nostrdebug.com/ connected to ws://localhost:8080 to test
   nostr-relay:
     image: scsibug/nostr-rs-relay:0.8.8
     ports:
-      - 8080:8080
+      - 127.0.0.1:8080:8080
     volumes:
       - nostr-relay:/usr/src/app/db
-
+    healthcheck:
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
 
 volumes:
   bitcoin-core:
