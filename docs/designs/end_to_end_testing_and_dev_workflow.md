@@ -1,7 +1,7 @@
 # End-to-End Testing, `justfile` Orchestration, Server Environment Config & On-Demand Regtest
 
 *   **Author:** Luigi Minardi
-*   **Status:** Approved
+*   **Status:** Implemented
 *   **Date:** 2026-11-24
 
 --------------------------------------------------------------------------------

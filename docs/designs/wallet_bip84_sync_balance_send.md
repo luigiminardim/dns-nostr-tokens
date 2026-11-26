@@ -1,7 +1,7 @@
 # Wallet BIP 84 Blockchain Sync, Balance, and Send (Issue #35)
 
 * **Author**: Luigi Minardi
-* **Status**: Ready for Implementation
+* **Status**: Implemented
 * **Date**: 2026-11-24
 
 --------------------------------------------------------------------------------

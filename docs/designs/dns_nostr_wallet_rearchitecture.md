@@ -1,7 +1,7 @@
 # Re-architect `dns_nostr_wallet` Domain, Key Derivation Policy, and Repository (Issue #34)
 
 *   **Author:** Luigi Minardi
-*   **Status:** Proposed
+*   **Status:** Implemented
 *   **Date:** 2026-11-08
 
 --------------------------------------------------------------------------------
@@ -452,4 +452,3 @@ Implements `NameTokenWalletRepository` over a `rusqlite::Connection` encapsulate
 <!-- Provenance: Indicates initial structural drafting via EGM. -->
 
 *Drafted with EGM*
-

@@ -35,6 +35,10 @@ are defined in [`docs/domain.md`](docs/domain.md).
   the same change that alters a directory's public symbols, invariants or side
   effects.
 - **`docs/domain.md`** is the ubiquitous language and domain model.
+- **`docs/designs/`** holds design documents. Keep each document's `**Status:**`
+  field up to date:
+  - Whenever a design document is reviewed, update its status to `Reviewed`.
+  - Whenever a design document is implemented, update its status to `Implemented`.
 
 ### Architecture
 
